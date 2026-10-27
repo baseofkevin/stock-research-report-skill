@@ -112,3 +112,64 @@
 分产品/分地区收入明细属于财报附注，WeStock 的三大报表通常不含。
 可用 `data_profile` 的主营构成或 `data_report` 的研报摘要补充，
 **引用时必须标注来源（如「据 XX 券商研报」）**。
+
+---
+
+## 六、实测补充（2026-10 首次实战：钒钛股份 sz000629）
+
+### 6.1 `fields=core` 实际返回的字段
+
+**利润表**：`OperatingRevenue` `OperatingCost` `OperatingProfit` `TotalProfit`
+`NPParentCompanyOwners` `NPDeductNonRecurringPL` `GrossIncomeRatio` `NetProfitRatio`
+`ROE` `ROECut` `ROA` `ROIC` `EBIT` `BasicEPS` `RAndD`
+`NPParentCompanyYOY` `NPParentCompanyYOY_Q` `NPParentCompanyCutYOY_Q`
+`TORGrowRate` `TORGrowRate_Q` `OperatingRevenueGrowRate_Q` `NPPCCGrowRate3Y` `ORComGrowRate3Y`
+以及四个 TTM 口径：`NPParentCompanyOwnersTTM` `OperatingRevenueTTM` `GrossProfitTTM` `OperatingProfitTTM`
+`ROETTM` `ROATTM` `EPSTTM`
+
+**资产负债表**：`CashEquivalents` `TotalAssets` `TotalCurrentAssets` `TotalNonCurrentAssets`
+`TotalCurrentLiability` `TotalNonCurrentLiability` `TotalLiability` `TotalShareholderEquity`
+`SEWithoutMI`（归母净资产）`NAPS`（每股净资产）`ShortTermLoan` `LongtermLoan` `InterestBearDebt`
+`WorkingCapital` 以及四个现成比率：`CurrentRatio` `QuickRatio` `DebtAssetsRatio` `DebtEquityRatio`
+和三个周转率：`ARTRate` `InventoryTRate` `TotalAssetTRate`
+
+**现金流量表**：`NetOperateCashFlow` `NetInvestCashFlow` `NetFinanceCashFlow`（三者的 TTM 版都有）
+`GoodsSaleServiceRenderCash`（销售商品收到现金）`FCFF` `FCFE` `NetCashFlowTTM` `OperCashFlowPS`
+
+### 6.2 core 拿不到的科目（实测确认，别再试了）
+
+合同负债 / 预收款项、商誉、在建工程、应付账款、应收票据及应收账款**绝对额**、
+存货**绝对额**、一年内到期非流动负债、未分配利润、资本公积。
+
+- 报告里一律写「暂无披露」，依赖合同负债的判定（信号 ②）置「无数据」。
+- 现金短债比分母只能取 `ShortTermLoan`，要在报告里注明口径不完整。
+- 补救分产品构成：用 `data_finsearch` 搜「{公司名} 主营构成 分产品 毛利率」，
+  实测能返回分产品、分地区的收入占比和近四年业绩趋势。
+- 补救行业价格 / 政策：同样用 `data_finsearch`，能拿到商品价格月评和产业政策原文。
+
+### 6.3 三个由现有字段反推的技巧
+
+1. **应收、存货的绝对额**：应收 ≈ 营业收入 ÷ `ARTRate`；存货 ≈ 营业成本 ÷ `InventoryTRate`。
+   够用来判断绝对额和占总资产比例，但**不要**拿反推值算精确到万元的同比。
+2. **家底是赚来的还是融资来的**：股本占比 = 总股本 ÷ `SEWithoutMI`。总股本从 `data_quote`
+   的 `total_shares` 或 `data_profile` 的 `regCapital` 取。
+   钒钛股份 92.91 ÷ 125.48 = 74%，说明家底主要靠融资，配合「连续零分红」一起读。
+3. **单季毛利率**（信号 ① 判定要用）：`GrossIncomeRatio` 是**累计口径**，不能直接当单季。
+   必须先按第五节「单季倒挤」算单季营收和单季成本，再算单季毛利率。
+
+### 6.4 三个容易误判的点
+
+1. **应收增速差的机械口径会误报**。营收塌方型企业，应收绝对额没涨、营收大跌三成，
+   算出来的「应收增速 − 营收增速」反而大幅为正（> +15pct）。
+   必须回看应收**绝对额**：没涨就不是放宽账期，是需求萎缩，不构成垫资风险。
+2. **静态 PE 为负不代表便宜**。亏损年度的 `pe_lyr` 是负数（钒钛股份 −263.85），
+   此时只能看 PB 和 TTM，并且要在报告里写清「静态 PE 已失真」。
+3. **利润大增要拆减值和研发**。大额资产减值计提的次年，反弹里有「不再计提」的成分；
+   研发费用降幅大于营收降幅，说明利润里有相当一块是省出来的，不可持续。
+
+### 6.5 小盘冷门票的取数预期
+
+- `data_consensus` 很可能直接返回「未找到一致预期数据」——不是报错，别重试。
+- `data_rating` 可能只有 1 家机构。报告里如实写「机构覆盖极低，缺少外部验证」。
+- 动态 PE 仍可从 `data_quote` 的 `pe_fwd` 反推隐含预期净利 = 总市值 ÷ `pe_fwd`，
+  并在报告里注明「隐含的假设是…」。
