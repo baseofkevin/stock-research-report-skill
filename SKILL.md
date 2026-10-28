@@ -43,9 +43,9 @@ description: 输入股票代码或名称，从腾讯自选股（WeStock）调取
 
 ## 第 0 步 · 先确认两件事（30 秒，但决定整篇是否正确）
 
-1. **报告期**：最新定期报告是哪天披露的、距今天多少天。三季报集中在 10 月下旬、
-   年报 3–4 月、中报 8 月；**别把上一期当「最新一期」**，也别在披露前抢跑。
-   报告里必须写明「{报告期} · {M 月 D 日}披露」。
+1. **报告期**：调 `data_disclosure`，它会返回最新定期报告的 `reportEndDate`（报告期）
+   和 `disclosureDate`（披露日）。**别把上一期当「最新一期」**，也别在披露前抢跑。
+   报告里必须写明「{报告期} · {M 月 D 日}披露」。三季报集中在 10 月下旬、年报 3–4 月、中报 8 月。
 2. **行情时点**：盘中取价要写成 `YYYY-MM-DD HH:MM 盘中`（`meta.price_at`）。
    PE / PB / 历史分位 / PEG / 股息率 / 买卖区间**全部由这个价格推出**，
    收盘后要按收盘价复核一遍，两个时点的数字不一致时以收盘为准。
@@ -64,8 +64,11 @@ data_quote        → 现价、涨跌幅、市值、PE/PB、股息率
 data_kline        → period=season, limit=40, fq=qfq   （季K线，判断股价位置）
 data_kline        → period=year,   limit=10, fq=qfq   （年K线，补长周期）
 data_profile      → 主营业务、行业、股本
-data_finance      → num=16                             （三大报表，至少 16 期）
-data_valuation    → PE/PB 历史序列（历史分位用）
+data_disclosure   → 最新定期报告的 reportEndDate + disclosureDate（第 0 步用）
+data_finance      → fields="all", num=16               （三大报表全字段，至少 16 期）
+                     ※ fields 不传 = "core"（25 个字段），会缺应付/存货/应收/合同负债的绝对额
+data_quote        → 再按 date=YYYY-MM-DD 循环采样 30~60 次，自建 PE/PB 历史分位
+                     ※ 没有 data_valuation 这个工具；必须间隔 ≥1.5 秒，否则「服务限频」
 data_consensus    → 机构一致预期（动态 PE 的来源）
 data_rating       → 机构评级
 data_dividend     → years=5                            （分红连续性）
@@ -80,6 +83,17 @@ data_score        → 诊股评分（只作交叉参考，不替代自己的判�
 **为什么是 16 期（4 年），不是 8 期**：单季倒挤、同季同比、TTM 三件事同时要数据——
 算 2026Q3 单季要 2026 中报；算同季同比要 2025Q3 累计；算 TTM 要 2025 年报。
 8 期只够两年季报，连第 4 节「财务全景」的门槛（≥10 期）都到不了。
+
+**实测边界（2026-10-28，别踩）**
+- `fields="all"` 能拿到 49 个资产负债表字段，含 `NotAccountsPayable`（应付账款）、
+  `OtherReceivableED`（其他应收）、`TradingAssets`（交易性金融资产）、`ContractLiability`
+  （合同负债）、`TConstruInProcess`（在建工程）、`RetainedProfit`、`CapitalReserveFund`。
+  **别用默认 `core` 然后写「接口拿不到」——那是没传参。**
+- 真正拿不到的只有：**商誉**（`Goodwill` 不存在）、短期/长期借款明细（只有 `InterestBearDebt` 合计）、
+  存货的产成品/发出商品拆分。这三项走 `data_finsearch` 或年报附注，拿不到就标「不可评」。
+- `data_finance` 的 `_Q` 单季字段与倒挤一致，可互验；**仍以倒挤为准**，顺带当一致性检查。
+- 服务端限频：连续快速调用约 80 次后报 `服务限频`，之后需要退避 ≥60 秒。
+  采样脚本必须断言返回是 JSON，否则会把限频当成「那天没数据」。
 
 **取数纪律**
 - 同一市场、支持 `codes` 的工具只调一次，逗号分隔。
@@ -260,6 +274,7 @@ python3 $S/lint_encoding.py  报告.html 报告.md   # ② 产物乱码自检，
 
 ## 变更记录
 
-见 `CHANGELOG.md`。v2.1.0 起：`num=16`、`data_valuation`、`price_at`、`data_gaps`、
-缺项归一化、结论矩阵、`validate.py`；修掉渲染器的轴单位叠字、排雷分母、图表静默跳过、
-MD 七步表空白、加权总分重复显示五处缺陷。
+见 `CHANGELOG.md`。v2.2.0 起：接口文档按 2026-10-28 实测重写（`fields="all"` 能拿到
+49 个资产负债表字段、`_Q` 单季字段、`data_quote` 的 `date` 参数、限频阈值）；
+`num=16`、`price_at`、`data_gaps`、缺项归一化、结论矩阵、`validate.py`；
+修掉渲染器的轴单位叠字、排雷分母、图表静默跳过、MD 七步表空白、加权总分重复五处缺陷。

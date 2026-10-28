@@ -48,6 +48,7 @@ ALLOW = {
     "rmb", "dt", "php", "js", "ts", "py", "sh", "sz", "bj",
     # 报告正文里合法出现的外部名词 / 接口名（避免误报）
     "charts", "rpt", "f10", "finance", "lico", "valueanalysis", "qyresearch", "ebitda", "ev",
+    "streamable", "http", "https", "oauth", "mcp", "jsonrpc", "sse", "bearer",
     "frost", "sullivan", "euromonitor", "gfk", "ipsos", "bloomberg",
     # 文档里描述脚本行为时必然出现的词
     "else", "periods", "stderr", "stdout", "pass", "warn", "fail", "lint",

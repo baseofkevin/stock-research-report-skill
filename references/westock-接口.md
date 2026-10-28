@@ -1,6 +1,6 @@
-# 腾讯自选股（WeStock）数据接口提纲
+# 腾讯自选股（WeStock）数据接口
 
-> 用于企业信息解读报告的取数。工具名以 WeStock MCP 为准，
+> 工具名、参数、字段名全部来自 **2026-10-28 实测**（`sz301101` 明月镜片 + `sz002382` 蓝帆医疗）。
 > 返回统一为 `{ "ok": true|false, "data": ..., "message": "..." }`。
 > **`ok: false` 时原样转述 message，禁止编造数据。**
 
@@ -26,78 +26,101 @@
 | 步骤 | 工具 | 关键参数 | 用途 |
 |:--:|---|:--:|---|
 | 1 | `data_search` | `query` | 名称 → 代码 |
-| 2 | `data_quote` | `code` | 现价、涨跌幅、市值、静态/滚动 PE、PB、股息率、换手率 |
-| 3 | `data_kline` | `code`, `period=season`, `limit=40`, `fq=qfq` | **季 K 线**：判断股价历史位置（第 1 段） |
-| 4 | `data_kline` | `code`, `period=year`, `limit=10`, `fq=qfq` | 年 K：补充长周期高低点 |
-| 5 | `data_profile` | `code` | 主营业务、所属行业、股本、上市日期 |
-| 6 | `data_finance` | `code`, `num=16` | **三大报表，至少 16 期**（单季倒挤 + 同季同比 + TTM 同时要数据；8 期连两年季报都不够） |
-| 7 | `data_valuation` | `code`, `days=1800` | PE/PB 历史序列（历史分位用）。接口没有这一项时，用季 K 收盘 × 当期 EPS 自建，并注明是自建口径 |
-| 8 | `data_consensus` | `code` | 机构一致预期（对应动态 PE） |
-| 9 | `data_rating` | `code` | 机构评级：可以从评级隐含的目标价反推盈利预测 |
-| 10 | `data_dividend` | `code`, `years=5` | 分红连续性，判断股息率含金量 |
-| 11 | `data_shareholder` | `code` | 股东结构、大股东性质（央企/民营） |
-| 12 | `data_risk` | `code` | 质押、解禁、诉讼、ST 风险 |
-| 13 | `data_notice` | `code`, `limit=20` | 近期公告（资产重组、减持、业绩预告） |
-| 14 | `data_news` | `code`, `limit=20` | 近期新闻与行业事件 |
-| 15 | `data_sector` | `mode=search` → `constituent` | 所属行业及可比同业（用于横向对比） |
-| 16 | `data_score` | `code` | 诊股评分，作为交叉参考，**不替代自己的判断** |
+| 2 | `data_disclosure` | `code` | **报告期确认**：最新定期报告的 `reportEndDate` + `disclosureDate` |
+| 3 | `data_quote` | `code` | 现价、涨跌幅、市值、`pe_ratio`(TTM) / `pe_lyr`(静态) / `pe_fwd`(动态)、`pb_ratio`、`dividend_ratio_ttm` |
+| 4 | `data_kline` | `code`, `period=season`, `limit=40`, `fq=qfq` | **季 K 线**：判断股价历史位置（第 1 段） |
+| 5 | `data_kline` | `code`, `period=year`, `limit=10`, `fq=qfq` | 年 K：补长周期高低点 |
+| 6 | `data_profile` | `code` | 主营、行业、股本、上市日期（**不含估值**，别指望它给 PE/PB） |
+| 7 | `data_finance` | `code`, `fields="all"`, `num=16` | **三大报表全字段**，见第三节 |
+| 8 | `data_consensus` | `code` | `targetPrice` + 未来三年 `netProfit`/`eps`/`pe`（动态 PE 的来源） |
+| 9 | `data_rating` | `code` | 机构评级 |
+| 10 | `data_dividend` | `code` | 分红送转序列 |
+| 11 | `data_shareholder` | `code` | 股东结构、大股东性质 |
+| 12 | `data_risk` | `code` | 质押、解禁、诉讼、ST（仅 A 股） |
+| 13 | `data_notice` | `code`, `limit=20` | 公告（重组/减持/业绩预告） |
+| 14 | `data_news` | `code`, `limit=20` | 个股新闻 |
+| 15 | `data_sector` | `mode=search` → `constituent` | 同业对比 |
+| 16 | `data_score` | `code` | 诊股评分，仅作交叉参考，**不替代自己的判断** |
 
-可选补充：`data_fund_flow`（资金流向）、`data_technical`（均线 MACD）、
-`data_industry_chain`（产业链位置）、`data_report` / `data_dehydrated`（研报观点）、
-`data_north_holding`（北向持仓）。
+可选：`data_fund_flow`、`data_technical`、`data_industry_chain`、`data_report`、
+`data_dehydrated`、`data_north_holding`、`data_finsearch`（文字检索，补附注类信息）。
+
+**没有 `data_valuation` 这个工具。** PE/PB 历史分位只能自己搭，见第七节。
 
 ---
 
-## 三、财报字段 → 报告指标的对应
+## 三、`data_finance`：一定要传 `fields="all"`
 
-`data_finance` 取回利润表（`income`）、资产负债表（`balance`）、现金流量表（`cashflow`）后，
-按下表取值计算：
+实测对比（`sz301101`，同一期）：
 
-### 利润表
+| 参数 | 资产负债表字段数 | 能不能算 §7 资产质量 |
+|---|:--:|---|
+| `fields="core"`（默认） | **25** | 不能：没有应付、存货、应收、其他应收、合同负债的绝对额 |
+| `fields="all"` | **49** | 能：全部拿到 |
 
-| 报告指标 | 取自 |
-|---|---|
-| 营业收入 | `OperatingRevenue` / 营业总收入 |
-| 营业成本 | `OperatingCost` |
-| 毛利率 | `(营业收入 − 营业成本) ÷ 营业收入` |
-| 归母净利润 | `NPParentCompanyOwners` |
-| 扣非净利润 | 归母净利润 − 非经常性损益（若接口未返回，查 `data_notice` 或研报） |
-| 净利率 | `净利润 ÷ 营业收入` |
-| 三项费用率 | 销售 / 管理 / 研发费用 ÷ 营业收入 |
+`fields="all"` 的资产负债表字段（49 个，2026-10-28 实测）：
 
-### 资产负债表
+```
+CashEquivalents  TradingAssets  BillAccReceivable  AdvancePayment  Inventories
+OtherCurrentAssets  OtherNonCurrentAssets  TotalFixedAsset  TConstruInProcess
+IntangibleAssets  LongtermEquityInvest  TotalAssets  TotalCurrentAssets
+TotalNonCurrentAssets  NotAccountsPayable  ContractLiability  SalariesPayable
+OtherPayableED  OtherCurrentLiability  NonCurrentLiabilityIn1Year
+LeaseLiabilities  TotalCurrentLiability  TotalNonCurrentLiability  TotalLiability
+PaidInCapital  CapitalReserveFund  SurplusReserveFund  RetainedProfit  SEWithoutMI
+TotalShareholderEquity  NAPS  InterestBearDebt  WorkingCapital  EnterpriseType
+ARTRate  InventoryTRate  TotalAssetTRate  CurrentRatio  QuickRatio
+DebtAssetsRatio  DebtEquityRatio  EBIT  NPDeductNonRecurringPL  SecuCode
+EndDate  InfoPublDate  date  _date
+```
 
-| 报告指标 | 取自 |
+对照报告指标：
+
+| 报告指标 | 字段 |
 |---|---|
 | 货币资金 | `CashEquivalents` |
-| 交易性金融资产 | 需与货币资金合并看「类现金」 |
+| 交易性金融资产（理财） | `TradingAssets` ← **经营性 PB 必需** |
 | 应收票据及应收账款 | `BillAccReceivable` |
+| 应收款项融资 | `ReceivablesFin` |
 | 存货 | `Inventories` |
-| 合同负债 / 预收款项 | `ContractLiability` / `AdvanceReceipts` |
-| 流动资产合计 | `TotalCurrentAssets` |
-| 流动负债合计 | `TotalCurrentLiability` |
-| 短期借款 | `ShortTermLoan` |
+| 应付账款 | `NotAccountsPayable`（名字反直觉，就是应付账款） |
+| 其他应收款 | `OtherReceivableED` |
+| 其他应付款 | `OtherPayableED` |
+| 合同负债 | `ContractLiability` |
+| 在建工程 | `TConstruInProcess` |
+| 资本公积 | `CapitalReserveFund` |
+| 未分配利润 | `RetainedProfit` |
+| 归母净资产 | `SEWithoutMI` |
+| 有息负债（合计） | `InterestBearDebt` |
 | 一年内到期非流动负债 | `NonCurrentLiabilityIn1Year` |
-| 商誉 | 无形资产下的 `Goodwill` |
-| 在建工程 | 固定资产下的在建工程 |
-| 未分配利润 / 资本公积 | 所有者权益明细 |
 
-### 现金流量表
+**`fields="all"` 也拿不到的（别浪费时间重试）**：
 
-| 报告指标 | 取自 |
-|---|---|
-| 经营活动现金流净额 | `NetOperateCashFlow` / `OCF` |
-| 投资 / 筹资活动现金流净额 | 同名科目 |
-| 自由现金流 | `经营活动现金流净额 − 购建固定资产等支付的现金` |
+- **商誉**（`Goodwill` 不存在）——排雷第 5 条只能走 `data_finsearch "公司名 商誉"` 或年报附注，
+  拿不到就把该项标「不可评」，不要猜。
+- **短期借款、长期借款**（`ShortTermLoan` / `LongtermLoan` 不存在）——只能看
+  `InterestBearDebt`（合计）和 `LeaseLiabilities`（租赁负债）。现金短债比的分母要用
+  `InterestBearDebt` 并在报告里注明口径。
+- **产成品 / 发出商品**等存货明细。
+
+### 利润表 / 现金流量表
+
+利润表 58 个字段，**含 `_Q` 单季口径**（`OperatingRevenue_Q`、`OperatingCost_Q`、
+`NPParentCompanyOwners_Q`、`NPDeductNonRecurringPL_Q`、`RAndD_Q`、`TotalAdminExpense_Q` …）。
+现金流量表 22 个字段，同样是「累计 + `_Q` + `TTM`」三套（`NetOperateCashFlow` /
+`_Q` / `NetOperateCashFlowTTM`）。
+
+> **但单季仍以倒挤为准**：`_Q` 实测与倒挤一致（301101 2026Q3 营收 `_Q`=2.7342 亿，
+> 倒挤=2.73 亿），两者可以互验；**不一致时用倒挤，并在报告里注明接口 `_Q` 与累计口径有出入**。
+> 不要因为接口给了 `_Q` 就跳过「本期累计 − 上期累计」这一步——它同时是数据一致性的检查。
 
 ---
 
 ## 四、TTM 与单季口径的处理规则
 
-- **同比**：本期累计 ÷ 上年同期累计 − 1。**年报对应年报，半年报对应半年报，不要混。**
-- **单季倒挤**：`第 N 季度 = 本期累计 − 上期累计`。
-  例：Q3 单季营收 = 三季报累计营收 − 半年报累计营收。
-- **TTM**：`本期累计 + 上年全年 − 上年同期累计`。
+- **同比**：本期累计 ÷ 上年同期累计 − 1。**年报对年报，半年报对半年报，不要混。**
+- **单季倒挤**：`第 N 季度 = 本期累计 − 上期累计`（并与 `_Q` 字段互验）。
+- **TTM**：`本期累计 + 上年全年 − 上年同期累计`；接口也有现成的 `*TTM` 字段可对照。
 - **趋势图**：优先用年报序列（噪音小），至少取 **5 年**（评判 ROE 连贯性的最低要求）。
 - **最新一期**优先用 **中报或三季报**，并注明报告期。
 
@@ -105,75 +128,91 @@
 
 ## 五、数据缺口的处理
 
-接口拿不到某个字段时：
-
-1. 先尝试同源替代（如 `data_consensus` 拿动态 PE，`data_rating` 反推预测净利）。
-2. 再尝试 `data_report` / `data_news` 的文字口径。
-3. **仍然没有就在报告里写「暂无披露」，该指标判定置为「无数据」，并写进 JSON 的 `data_gaps`。**
-   打分卡里这些项**从分母剔除**（不记 0 分），报告要写清「本次可评 N / 16 项」。
-4. **绝对不能用训练记忆或常识补齐具体数字**——这是这份报告的生命线。
-
-分产品/分地区收入明细属于财报附注，WeStock 的三大报表通常不含。
-可用 `data_profile` 的主营构成或 `data_report` 的研报摘要补充，
-**引用时必须标注来源（如「据 XX 券商研报」）**。
+1. **先确认参数用对了**：`data_finance` 必须 `fields="all"`；**默认的 `core` 会让你误以为
+   应付账款、存货、合同负债「接口拿不到」**——实测都能拿到。
+2. 再尝试同源替代（`data_consensus` 拿动态 PE、`data_finsearch` 拿附注类信息）。
+3. 仍然没有 → 报告写「暂无披露」，该指标判定置「无数据」，写进 JSON 的 `data_gaps`；
+   打分卡该项 `value: null`（**从分母剔除，不记 0 分**）。
+4. **绝对不能用训练记忆或常识补齐具体数字。**
 
 ---
 
-## 六、实测补充（2026-10 首次实战：钒钛股份 sz000629）
+## 六、实测补充（2026-10-28）
 
-### 6.1 `fields=core` 实际返回的字段
+### 6.1 一次典型返回的规模
 
-**利润表**：`OperatingRevenue` `OperatingCost` `OperatingProfit` `TotalProfit`
-`NPParentCompanyOwners` `NPDeductNonRecurringPL` `GrossIncomeRatio` `NetProfitRatio`
-`ROE` `ROECut` `ROA` `ROIC` `EBIT` `BasicEPS` `RAndD`
-`NPParentCompanyYOY` `NPParentCompanyYOY_Q` `NPParentCompanyCutYOY_Q`
-`TORGrowRate` `TORGrowRate_Q` `OperatingRevenueGrowRate_Q` `NPPCCGrowRate3Y` `ORComGrowRate3Y`
-以及四个 TTM 口径：`NPParentCompanyOwnersTTM` `OperatingRevenueTTM` `GrossProfitTTM` `OperatingProfitTTM`
-`ROETTM` `ROATTM` `EPSTTM`
+`data_finance(code, fields="all", num=16)` 返回 16 期 × 三大报表：
+利润表 58 字段、资产负债表 49 字段、现金流量表 22 字段。够算全部 14 章指标，
+不需要再拼其他接口。
 
-**资产负债表**：`CashEquivalents` `TotalAssets` `TotalCurrentAssets` `TotalNonCurrentAssets`
-`TotalCurrentLiability` `TotalNonCurrentLiability` `TotalLiability` `TotalShareholderEquity`
-`SEWithoutMI`（归母净资产）`NAPS`（每股净资产）`ShortTermLoan` `LongtermLoan` `InterestBearDebt`
-`WorkingCapital` 以及四个现成比率：`CurrentRatio` `QuickRatio` `DebtAssetsRatio` `DebtEquityRatio`
-和三个周转率：`ARTRate` `InventoryTRate` `TotalAssetTRate`
+### 6.2 `data_quote` 的 `date` 参数能拿历史估值
 
-**现金流量表**：`NetOperateCashFlow` `NetInvestCashFlow` `NetFinanceCashFlow`（三者的 TTM 版都有）
-`GoodsSaleServiceRenderCash`（销售商品收到现金）`FCFF` `FCFE` `NetCashFlowTTM` `OperCashFlowPS`
+`data_quote(code, date="2024-12-31")` 返回该日的 `pe_ratio` / `pb_ratio` / `pe_lyr` / `pe_fwd`
+/ `total_market_cap` 等，与当日行情一致。**这是搭 PE/PB 历史分位的唯一路径**，见第七节。
 
-### 6.2 core 拿不到的科目（实测确认，别再试了）
-
-合同负债 / 预收款项、商誉、在建工程、应付账款、应收票据及应收账款**绝对额**、
-存货**绝对额**、一年内到期非流动负债、未分配利润、资本公积。
-
-- 报告里一律写「暂无披露」，依赖合同负债的判定（信号 ②）置「无数据」。
-- 现金短债比分母只能取 `ShortTermLoan`，要在报告里注明口径不完整。
-- 补救分产品构成：用 `data_finsearch` 搜「{公司名} 主营构成 分产品 毛利率」，
-  实测能返回分产品、分地区的收入占比和近四年业绩趋势。
-- 补救行业价格 / 政策：同样用 `data_finsearch`，能拿到商品价格月评和产业政策原文。
-
-### 6.3 三个由现有字段反推的技巧
-
-1. **应收、存货的绝对额**：应收 ≈ 营业收入 ÷ `ARTRate`；存货 ≈ 营业成本 ÷ `InventoryTRate`。
-   够用来判断绝对额和占总资产比例，但**不要**拿反推值算精确到万元的同比。
-2. **家底是赚来的还是融资来的**：股本占比 = 总股本 ÷ `SEWithoutMI`。总股本从 `data_quote`
-   的 `total_shares` 或 `data_profile` 的 `regCapital` 取。
-   钒钛股份 92.91 ÷ 125.48 = 74%，说明家底主要靠融资，配合「连续零分红」一起读。
-3. **单季毛利率**（信号 ① 判定要用）：`GrossIncomeRatio` 是**累计口径**，不能直接当单季。
-   必须先按第五节「单季倒挤」算单季营收和单季成本，再算单季毛利率。
-
-### 6.4 三个容易误判的点
+### 6.3 三个容易误判的点
 
 1. **应收增速差的机械口径会误报**。营收塌方型企业，应收绝对额没涨、营收大跌三成，
    算出来的「应收增速 − 营收增速」反而大幅为正（> +15pct）。
    必须回看应收**绝对额**：没涨就不是放宽账期，是需求萎缩，不构成垫资风险。
-2. **静态 PE 为负不代表便宜**。亏损年度的 `pe_lyr` 是负数（钒钛股份 −263.85），
-   此时只能看 PB 和 TTM，并且要在报告里写清「静态 PE 已失真」。
-3. **利润大增要拆减值和研发**。大额资产减值计提的次年，反弹里有「不再计提」的成分；
-   研发费用降幅大于营收降幅，说明利润里有相当一块是省出来的，不可持续。
+2. **静态 PE 为负不代表便宜**（`pe_lyr` 负数），只能看 PB 和 TTM。
+3. **同一时点不同接口的 PE 会差 3%~5%**（`data_quote.pe_ratio` vs 行情站口径）。
+   报告里只用一套口径，并在脚注写明用的是哪个字段。
 
-### 6.5 小盘冷门票的取数预期
+### 6.4 小盘冷门票的取数预期
 
-- `data_consensus` 很可能直接返回「未找到一致预期数据」——不是报错，别重试。
+- `data_consensus` 可能返回 `institutionCnt: 0`（有预测但没统计到机构数）——不是报错。
 - `data_rating` 可能只有 1 家机构。报告里如实写「机构覆盖极低，缺少外部验证」。
-- 动态 PE 仍可从 `data_quote` 的 `pe_fwd` 反推隐含预期净利 = 总市值 ÷ `pe_fwd`，
-  并在报告里注明「隐含的假设是…」。
+- 动态 PE 也可用 `pe_fwd` 反推隐含预期净利 = 总市值 ÷ `pe_fwd`，并注明「隐含的假设是…」。
+
+---
+
+## 七、历史估值分位：怎么搭、限频怎么躲
+
+**没有现成的历史估值接口**，只能循环 `data_quote(date=…)` 采样。实测数据：
+
+- 服务端有**限频**：连续快速调用约 80 次后开始返回
+  `查询财报异常：error_type=2 suggest=2 msg=服务限频`（连 `data_finance` 也会被拒）。
+- 触发后需要**退避 60 秒以上**，否则后续调用全失败——失败是静默的（返回文本不是 JSON），
+  写脚本时**必须断言返回是 JSON**，否则会把失败当成「那天没数据」。
+- 实测每次调用约 0.3~1 秒；建议 **间隔 ≥1.5 秒**。
+
+**推荐的采样方案（按公司上市年数选）**：
+
+| 上市年数 | 采样频率 | 调用次数 | 说明 |
+|---|:--:|:--:|---|
+| ≥ 10 年 | 月末 | ~120 | 分位精度够用 |
+| 5 ~ 10 年 | 月末 | ~60~120 | 同上 |
+| 2 ~ 5 年 | **月末** | ~24~60 | 建议同时给出「样本区间 + 点数」 |
+| < 2 年 | 月末 | < 24 | 样本太少，**只写区间不给分位** |
+
+**不要**逐交易日采样（1200+ 次调用必然被限频，且对分位精度没有实质提升）。
+
+**分位算法**：`分位 = 低于当前值的样本数 ÷ 有效样本数`；只统计 `pe_ratio > 0` 的样本
+（亏损期 PE 为负或空，混进去会把分位算低）。报告里必须写出样本区间与点数，
+例如「PE 分位 19.3%，样本 2021-12-16 起 1176 个交易日」。
+
+**实测校验（301101，2026-10-28）**：月末采样 59 个点算得 PE 分位 16.9%、PB 分位 25.4%；
+用东财 1176 个交易日的日频序列算是 19.3% / 29.3%。**相差 2~4 个百分点，月末采样够用**，
+不必为了精度去冒限频的险。
+
+**上市不足 5 年的公司**，分位低可能只是「从上市初期的泡沫里跌下来」，不能当便宜的证明。
+
+---
+
+## 八、一句话速查
+
+```
+data_search     → 代码
+data_disclosure → 报告期 + 披露日
+data_quote      → 行情 + 三种 PE + PB（date= 可查历史，用于自建分位）
+data_kline      → 季K/年K（period=season/year, fq=qfq）
+data_profile    → 主营/行业/股本/上市日（没有估值）
+data_finance    → fields="all", num=16（三大报表 16 期全字段）
+data_consensus  → targetPrice + 三年预测（动态 PE）
+data_rating     → 评级    data_dividend → 分红
+data_shareholder→ 股东    data_risk → 质押/解禁/诉讼
+data_notice     → 公告    data_news → 新闻
+data_sector     → 同业    data_score → 诊股（仅参考）
+data_finsearch  → 文字检索，补商誉/附注类缺口
+```
