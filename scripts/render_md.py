@@ -16,7 +16,9 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from render_report import get  # noqa: E402
+from render_report import get, redflag_head  # noqa: E402
+
+STATE_TXT = {"pass": "通过", "fail": "否决", "warn": "存疑", "na": "无数据"}
 
 
 # ---------------------------------------------------------------- 工具
@@ -86,7 +88,8 @@ def b_verdict(v: dict) -> str:
            t(v.get("summary")), ""]
     tags = v.get("tags") or []
     if tags:
-        out.append("关键标签：" + "、".join(t(tg.get("text")) for tg in tags) + "\n")
+        out.append("关键标签：" + "、".join(
+            t(tg if isinstance(tg, str) else tg.get("text")) for tg in tags) + "\n")
     return "\n".join(out)
 
 
@@ -330,11 +333,13 @@ def b_redflags(items: list[dict], title: str = "排雷扫描") -> str:
     if not items:
         return ""
     hits = [r for r in items if r.get("hit")]
-    out = [f"## {t(title)}（命中 {len(hits)} / {len(items)} 项）\n"]
+    out = [f"## {t(redflag_head(title, items))}\n"]
     if not hits:
         out.append("暂未命中已知的高危组合信号。\n")
     else:
-        rows = [[t(r.get("level")), t(r.get("text")), t(r.get("evidence"))] for r in hits]
+        rows = [[t(r.get("level")),
+                 (f"#{t(r.get('id'))} " if r.get("id") is not None else "") + t(r.get("text")),
+                 t(r.get("evidence"))] for r in hits]
         out += [md_table(["等级", "信号", "依据"], rows, "cll"), ""]
     return "\n".join(out)
 
@@ -345,7 +350,8 @@ def b_scorecard(sc: dict, title: str = "七步研判") -> str:
     out = [f"## {t(title)}\n"]
     steps = sc.get("steps") or []
     if steps:
-        rows = [[t(s.get("no")), t(s.get("name")), t(s.get("state_text")),
+        rows = [[t(s.get("no")), t(s.get("name")),
+                 t(s.get("state_text") or STATE_TXT.get(str(s.get("state", "na")).lower(), "无数据")),
                  t(s.get("conclusion"))] for s in steps]
         out += [md_table(["步", "维度", "结论", "要点"], rows, "clll"), ""]
     items = sc.get("items") or []
@@ -359,8 +365,12 @@ def b_scorecard(sc: dict, title: str = "七步研判") -> str:
         total = sum(float(i.get("value", 0)) * float(i.get("weight", 1)) for i in items)
         maxv = sum(abs(float(i.get("weight", 1))) * 2 for i in items)
         line = f"**加权总分：{total:+.0f} / 满分 {maxv:.0f}**"
-        if sc.get("total"):
-            line += f"（报告标注值 {t(sc['total'])}）"
+        declared = sc.get("total")
+        if declared:
+            import re as _re
+            m2 = _re.match(r"\s*([+-]?\d+)", str(declared))
+            if not m2 or abs(int(m2.group(1)) - total) > 0.5:
+                line += f"（⚠ 与 JSON 标注值 {t(declared)} 不一致，以实算为准）"
         out += [line, ""]
         if sc.get("total_note"):
             out += [t(sc["total_note"]), ""]
@@ -376,6 +386,16 @@ def b_conclusion(c: dict, title: str = "综合研判") -> str:
         out += ["### 后续跟踪清单\n", bullets(c["watchlist"], "1."), ""]
     if c.get("triggers"):
         out += ["### 判断修正的触发条件\n", bullets(c["triggers"]), ""]
+    return "\n".join(out)
+
+
+def b_gaps(items: list, title: str = "数据缺口与口径风险") -> str:
+    if not items:
+        return ""
+    out = [f"## {t(title)}\n"]
+    for g in items:
+        out.append(f"- {t(g)}")
+    out.append("")
     return "\n".join(out)
 
 
@@ -406,14 +426,21 @@ def render_md(data: dict) -> str:
             b_latest_old(data.get("latest") or {}),
             b_balance_old(data.get("balance") or {}),
         ]),
-        b_redflags(data.get("redflags") or [], data.get("redflags_title") or "五、排雷扫描"),
-        b_scorecard(data.get("scorecard") or {}, data.get("scorecard_title") or "六、七步研判"),
-        b_conclusion(data.get("conclusion") or {}, data.get("conclusion_title") or "七、综合研判"),
+        # v1 结构多出三块，编号整体后移一位（与 HTML 版一致）
+        b_redflags(data.get("redflags") or [],
+                   data.get("redflags_title") or ("五、排雷扫描" if has_new else "六、排雷扫描")),
+        b_scorecard(data.get("scorecard") or {},
+                    data.get("scorecard_title") or ("六、七步研判" if has_new else "七、七步研判")),
+        b_conclusion(data.get("conclusion") or {},
+                     data.get("conclusion_title") or ("七、综合研判" if has_new else "八、综合研判")),
+        b_gaps(data.get("data_gaps") or []),
         b_sources(data.get("sources") or []),
     ]
     body = "\n".join(b for b in blocks if b)
     if m.get("report_date"):
-        body += f"\n---\n\n*{t(m['report_date'])} 生成　·　本报告基于公开数据整理，仅供参考，不构成投资建议*\n"
+        _at = f"　·　行情时点 {t(m['price_at'])}" if m.get("price_at") else ""
+        body += (f"\n---\n\n*{t(m['report_date'])} 生成{_at}　·　"
+                 f"本报告基于公开数据整理，仅供参考，不构成投资建议*\n")
     # 收敛多余空行
     while "\n\n\n\n" in body:
         body = body.replace("\n\n\n\n", "\n\n\n")

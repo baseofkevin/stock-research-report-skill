@@ -1,0 +1,165 @@
+{
+  "_note": "v1 旧结构（trends/latest/balance 三块），用来确认渲染器仍能吃旧样例，且会提示 schema_version 不是 2。",
+  "meta": {
+    "name": "示例公司",
+    "code": "sz000000",
+    "tagline": "旧版 schema 回归样例",
+    "price": "10.00",
+    "change_pct": "+1.00%",
+    "chg_note": "2026-01-01 收盘",
+    "market_cap": "50.00 亿",
+    "cap_note": "总股本 5 亿股",
+    "industry": "示例行业",
+    "industry_note": "回归用",
+    "report_date": "2026-01-01"
+  },
+  "verdict": {
+    "stance": "谨慎观望",
+    "level": "watch",
+    "headline": "旧结构样例",
+    "summary": "用于验证 v1 分支仍可渲染。",
+    "tags": [
+      "回归"
+    ]
+  },
+  "core_metrics": [
+    {
+      "label": "静态 PE",
+      "value": "20.0",
+      "note": "回归",
+      "flag": "ok"
+    }
+  ],
+  "trends": {
+    "title": "三、跨年趋势",
+    "years": [
+      "2024",
+      "2025"
+    ],
+    "series": [
+      {
+        "name": "营业收入（亿元）",
+        "values": [
+          "5.0",
+          "6.0"
+        ]
+      }
+    ],
+    "comment": "回归样例。"
+  },
+  "latest": {
+    "title": "最新一期",
+    "period": "2025 年报",
+    "comment": "回归样例。",
+    "items": [
+      {
+        "label": "营收",
+        "value": "6.0 亿",
+        "yoy": "+20%",
+        "note": ""
+      }
+    ]
+  },
+  "balance": {
+    "title": "资产负债",
+    "comment": "回归样例。",
+    "items": [
+      {
+        "label": "货币资金",
+        "value": "3.0 亿",
+        "note": ""
+      }
+    ],
+    "risks": [
+      {
+        "name": "现金短债比",
+        "value": "3.0 倍",
+        "level": "正常",
+        "threshold": "> 1"
+      }
+    ]
+  },
+  "redflags": [
+    {
+      "level": "关注",
+      "text": "示例信号",
+      "evidence": "分子 1 / 分母 2",
+      "hit": true
+    }
+  ],
+  "scorecard": {
+    "steps": [
+      {
+        "no": "1",
+        "name": "验真伪",
+        "state": "pass",
+        "conclusion": "回归"
+      },
+      {
+        "no": "2",
+        "name": "看趋势",
+        "state": "pass",
+        "conclusion": "回归"
+      },
+      {
+        "no": "3",
+        "name": "查质量",
+        "state": "pass",
+        "conclusion": "回归"
+      },
+      {
+        "no": "4",
+        "name": "排雷",
+        "state": "pass",
+        "conclusion": "回归"
+      },
+      {
+        "no": "5",
+        "name": "定性质",
+        "state": "pass",
+        "conclusion": "回归"
+      },
+      {
+        "no": "6",
+        "name": "交叉验证",
+        "state": "pass",
+        "conclusion": "回归"
+      },
+      {
+        "no": "7",
+        "name": "问价格",
+        "state": "pass",
+        "conclusion": "回归"
+      }
+    ],
+    "items": [
+      {
+        "dim": "示例维度",
+        "value": 1,
+        "weight": 1
+      }
+    ],
+    "total": "+1 / 满分 2"
+  },
+  "conclusion": {
+    "paragraphs": [
+      "第一段。",
+      "第二段。",
+      "第三段。"
+    ],
+    "watchlist": [
+      "毛利率跌破 50% → 逻辑证伪",
+      "应收周转破 90 天 → 垫资",
+      "净现比 < 0.8 → 存疑"
+    ],
+    "triggers": [
+      "若价格回到 8 元以下 → 上调"
+    ]
+  },
+  "sources": [
+    {
+      "name": "示例源",
+      "detail": "回归样例，非真实数据"
+    }
+  ]
+}

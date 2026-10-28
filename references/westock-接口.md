@@ -28,16 +28,17 @@
 | 3 | `data_kline` | `code`, `period=season`, `limit=40`, `fq=qfq` | **季 K 线**：判断股价历史位置（第 1 段） |
 | 4 | `data_kline` | `code`, `period=year`, `limit=10`, `fq=qfq` | 年 K：补充长周期高低点 |
 | 5 | `data_profile` | `code` | 主营业务、所属行业、股本、上市日期 |
-| 6 | `data_finance` | `code`, `num=8` | **三大报表，至少 8 期**（覆盖 2 年年报 + 近期季报） |
-| 7 | `data_consensus` | `code` | 机构一致预期（对应动态 PE） |
-| 8 | `data_rating` | `code` | 机构评级：可以从评级隐含的目标价反推盈利预测 |
-| 9 | `data_dividend` | `code`, `years=5` | 分红连续性，判断股息率含金量 |
-| 10 | `data_shareholder` | `code` | 股东结构、大股东性质（央企/民营） |
-| 11 | `data_risk` | `code` | 质押、解禁、诉讼、ST 风险 |
-| 12 | `data_notice` | `code`, `limit=20` | 近期公告（资产重组、减持、业绩预告） |
-| 13 | `data_news` | `code`, `limit=20` | 近期新闻与行业事件 |
-| 14 | `data_sector` | `mode=search` → `constituent` | 所属行业及可比同业（用于横向对比） |
-| 15 | `data_score` | `code` | 诊股评分，作为交叉参考，**不替代自己的判断** |
+| 6 | `data_finance` | `code`, `num=16` | **三大报表，至少 16 期**（单季倒挤 + 同季同比 + TTM 同时要数据；8 期连两年季报都不够） |
+| 7 | `data_valuation` | `code`, `days=1800` | PE/PB 历史序列（历史分位用）。接口没有这一项时，用季 K 收盘 × 当期 EPS 自建，并注明是自建口径 |
+| 8 | `data_consensus` | `code` | 机构一致预期（对应动态 PE） |
+| 9 | `data_rating` | `code` | 机构评级：可以从评级隐含的目标价反推盈利预测 |
+| 10 | `data_dividend` | `code`, `years=5` | 分红连续性，判断股息率含金量 |
+| 11 | `data_shareholder` | `code` | 股东结构、大股东性质（央企/民营） |
+| 12 | `data_risk` | `code` | 质押、解禁、诉讼、ST 风险 |
+| 13 | `data_notice` | `code`, `limit=20` | 近期公告（资产重组、减持、业绩预告） |
+| 14 | `data_news` | `code`, `limit=20` | 近期新闻与行业事件 |
+| 15 | `data_sector` | `mode=search` → `constituent` | 所属行业及可比同业（用于横向对比） |
+| 16 | `data_score` | `code` | 诊股评分，作为交叉参考，**不替代自己的判断** |
 
 可选补充：`data_fund_flow`（资金流向）、`data_technical`（均线 MACD）、
 `data_industry_chain`（产业链位置）、`data_report` / `data_dehydrated`（研报观点）、
@@ -106,7 +107,8 @@
 
 1. 先尝试同源替代（如 `data_consensus` 拿动态 PE，`data_rating` 反推预测净利）。
 2. 再尝试 `data_report` / `data_news` 的文字口径。
-3. **仍然没有就在报告里写「暂无披露」，并把该指标的判定置为「无数据」。**
+3. **仍然没有就在报告里写「暂无披露」，该指标判定置为「无数据」，并写进 JSON 的 `data_gaps`。**
+   打分卡里这些项**从分母剔除**（不记 0 分），报告要写清「本次可评 N / 16 项」。
 4. **绝对不能用训练记忆或常识补齐具体数字**——这是这份报告的生命线。
 
 分产品/分地区收入明细属于财报附注，WeStock 的三大报表通常不含。

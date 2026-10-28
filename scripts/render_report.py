@@ -338,7 +338,7 @@ def svg_multi(labels: list, series: list, unit_l: str = "", unit_r: str = "",
 
     n = len(labels)
     w = 980
-    pad_l, pad_r, pad_t, pad_b = 60, 60, 16, 34
+    pad_l, pad_r, pad_t, pad_b = 60, 60, 26, 34
     legend_h = 24
     plot_h = height - pad_t - pad_b - legend_h
 
@@ -485,12 +485,12 @@ def svg_multi(labels: list, series: list, unit_l: str = "", unit_r: str = "",
     # 轴单位
     if unit_l:
         parts.append(
-            f'<text x="{pad_l - 7}" y="{pad_t - 4:.1f}" text-anchor="end" '
+            f'<text x="{pad_l - 7}" y="{pad_t - 12:.1f}" text-anchor="end" '
             f'font-size="10" fill="#a6adba">{html.escape(unit_l)}</text>'
         )
     if unit_r and has_r:
         parts.append(
-            f'<text x="{w - pad_r + 7}" y="{pad_t - 4:.1f}" text-anchor="start" '
+            f'<text x="{w - pad_r + 7}" y="{pad_t - 12:.1f}" text-anchor="start" '
             f'font-size="10" fill="#a6adba">{html.escape(unit_r)}</text>'
         )
     parts.append("</svg>")
@@ -536,8 +536,11 @@ def sec_verdict(v: dict) -> str:
     if tags:
         out.append('<div class="chips">')
         for t in tags:
-            kind = t.get("kind", "")
-            out.append(f'<span class="chip {kind}">{esc(t.get("text"))}</span>')
+            if isinstance(t, str):            # 允许直接写字符串标签
+                kind, txt = "", t
+            else:
+                kind, txt = t.get("kind", ""), t.get("text")
+            out.append(f'<span class="chip {kind}">{esc(txt)}</span>')
         out.append("</div>")
     out.append("</section>")
     return "".join(out)
@@ -654,6 +657,9 @@ def sec_financials(f: dict) -> str:
                         ch.get("unit_l", ""), ch.get("unit_r", ""),
                         int(ch.get("height", 300)))
         if not svg:
+            print(f"[warn] 趋势图「{ch.get('title') or f'趋势图 {idx + 1}'}」没有可绘制的数值，"
+                  f"已跳过；检查 series[].values 是否全为数字（带 % 或 亿 的字符串画不出来）。",
+                  file=sys.stderr)
             continue
         out.append(f"<h3>{esc(ch.get('title') or f'趋势图 {idx + 1}')}</h3>")
         out.append(f'<div class="chart-box">{svg}</div>')
@@ -886,12 +892,31 @@ def sec_balance(bs: dict) -> str:
     return "".join(out)
 
 
+REDFLAG_TOTAL = 25
+
+
+def redflag_head(title: str, items: list[dict]) -> str:
+    """排雷区块标题。
+
+    分母固定为清单条数（25），不再拿「传进来的条数」当分母——
+    否则只列命中项时会显示成「命中 4 / 4 项」，看着像全中。
+    """
+    hits = [r for r in items if r.get("hit")]
+    ids = [str(r.get("id")) for r in hits if r.get("id") is not None]
+    if ids:
+        tail = "、".join("#" + i for i in ids)
+        return f"{title}（命中 {len(hits)} / {REDFLAG_TOTAL} 条：{tail}）"
+    if len(items) > len(hits):
+        return f"{title}（命中 {len(hits)} / {len(items)} 条）"
+    return f"{title}（命中 {len(hits)} 条）"
+
+
 def sec_redflags(items: list[dict], title: str = "排雷扫描") -> str:
     if not items:
         return ""
     hits = [r for r in items if r.get("hit")]
     out = [
-        f"<section><h2>{esc(title)}（命中 {len(hits)} / {len(items)} 项）</h2>",
+        f"<section><h2>{esc(redflag_head(title, items))}</h2>",
     ]
     if not hits:
         out.append("<p>暂未命中已知的高危组合信号。</p>")
@@ -907,7 +932,7 @@ def sec_redflags(items: list[dict], title: str = "排雷扫描") -> str:
             cls = next((v for k, v in lv_map.items() if lv.startswith(k)), "lv-mid")
             out.append(
                 f"<tr><td class='center'><span class='lv {cls}'>{esc(lv)}</span></td>"
-                f"<td>{esc(r.get('text'))}</td>"
+                f"<td>{('<span class=\'muted\'>#' + esc(r['id']) + '</span> ') if r.get('id') is not None else ''}{esc(r.get('text'))}</td>"
                 f"<td class='muted'>{esc(r.get('evidence'))}</td></tr>"
             )
         out.append("</tbody></table></div>")
@@ -982,6 +1007,17 @@ def sec_conclusion(c: dict, title: str = "综合研判") -> str:
     return "".join(out)
 
 
+def sec_gaps(items: list, title: str = "数据缺口与口径风险") -> str:
+    """把拿不到的指标显式列出来，而不是让整个区块悄悄消失。"""
+    if not items:
+        return ""
+    out = [f"<section><h2>{esc(title)}</h2><ul class='watch'>"]
+    for g in items:
+        out.append(f"<li>{esc(g)}</li>")
+    out.append("</ul></section>")
+    return "".join(out)
+
+
 def sec_sources(items: list, title: str = "数据来源与口径") -> str:
     if not items:
         return ""
@@ -1030,6 +1066,11 @@ def render(data: dict) -> str:
     m = data.get("meta") or {}
     title = f'{m.get("name", "个股")}（{m.get("code", "")}）企业信息解读'
     has_new = bool(data.get("financials"))
+    sv = data.get("schema_version", m.get("schema_version"))
+    if str(sv) != "2":
+        print(f"[warn] schema_version={sv!r}，脚本按 v2 结构渲染；"
+              f"v1 旧样例会整块丢掉「财务全景」章节，请对照 scripts/sample.json。",
+              file=sys.stderr)
     body = "".join([
         build_hero(m),
         sec_verdict(data.get("verdict") or {}),
@@ -1045,18 +1086,25 @@ def render(data: dict) -> str:
             sec_latest(data.get("latest") or {}),
             sec_balance(data.get("balance") or {}),
         ])),
+        # v1 结构多出「趋势 / 最新 / 资产负债」三块，后续编号整体后移一位
         sec_redflags(data.get("redflags") or [],
-                     data.get("redflags_title") or "五、排雷扫描"),
+                     data.get("redflags_title") or ("五、排雷扫描" if has_new else "六、排雷扫描")),
         sec_scorecard(data.get("scorecard") or {},
-                      data.get("scorecard_title") or "六、七步研判"),
+                      data.get("scorecard_title") or ("六、七步研判" if has_new else "七、七步研判")),
         sec_conclusion(data.get("conclusion") or {},
-                       data.get("conclusion_title") or "七、综合研判"),
+                       data.get("conclusion_title") or ("七、综合研判" if has_new else "八、综合研判")),
+        sec_gaps(data.get("data_gaps") or []),
         sec_sources(data.get("sources") or []),
     ])
     date_line = ""
+    if m.get("price_at"):
+        pass  # 行情时点由下方 footer 拼接
     if m.get("report_date"):
         date_line = f'<footer>{esc(m["report_date"])} 生成　·　' \
                     f'本 报 告 基于公开数据整理，仅供参考，不构成投资建议</footer>'
+    if m.get("price_at") and date_line:
+        date_line = date_line.replace("生成　·　",
+                                      f"生成　·　行情时点 {esc(m['price_at'])}　·　", 1)
     return (
         f'<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width,initial-scale=1">'

@@ -1,0 +1,37 @@
+{
+  "_note": "回归用例清单：cases/*.json 是输入，expect 是断言。改脚本后跑 `python3 evals/run.py`，全绿再提交。",
+  "cases": [
+    {
+      "file": "cases/mingyue-v2.json",
+      "desc": "v2 完整样例（明月镜片实跑数据）",
+      "expect_valid": true,
+      "expect_stance": "看好，但等安全边际",
+      "must_contain": [
+        "排雷扫描（命中 4 / 25 条：#9、#23、#14、#20）",
+        "数据缺口与口径风险",
+        "① 单季主表"
+      ]
+    },
+    {
+      "file": "cases/minimal-v1.json",
+      "desc": "v1 旧结构，验证向后兼容（应告警但仍能出报告）",
+      "expect_valid": true,
+      "allow_only_warns": true,
+      "must_contain": [
+        "跨年趋势",
+        "资产负债"
+      ]
+    },
+    {
+      "file": "cases/broken-v2.json",
+      "desc": "四类故意错误，validation 必须失败",
+      "expect_valid": false,
+      "expect_error_contains": [
+        "有 10 个值",
+        "含非数字",
+        "id=99",
+        "标注 +58"
+      ]
+    }
+  ]
+}
