@@ -31,6 +31,7 @@ ALLOW = {
     "data_profile", "data_finance", "data_notice", "data_news", "data_sector",
     "data_risk", "data_score", "data_rating", "data_report", "data_dividend",
     "data_shareholder", "data_consensus", "sample", "json", "report",
+    "markdown", "html",
     "core", "fields", "code", "num", "query", "limit", "fq", "qfq", "period",
     "connector",
 }

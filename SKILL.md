@@ -64,42 +64,84 @@ data_sector      → mode=search 后 constituent         （同业对比）
 
 ### 第 2 步 · 计算
 
-对照 `references/指标体系.md` 把原始数变成判断：
+对照 `references/指标体系.md`（章节编号与手册十四章对齐）逐项算出，**不要跳项**：
 
-- 必算：毛利率及同比、净现比、扣非净现比、应收增速差、现金短债比、速动比率、
-  ROE/ROA/ROIC、资产负债率（剔合同负债）、有息负债、利息覆盖倍数（毛利额÷利息费用）、
-  商誉占净资产比、理财占总资产比、营运资本占用（应收+存货−应付）。
-- 同比口径要标清楚：**年报对年报，半年报对半年报**；
+- **§1 安全四项**：现金短债比、净现比（四档）、应收增速差、速动比率 + 流动比率、营运资本
+- **§2 改善三项**：单季毛利率序列（先用「本期累计 − 上期累计」倒挤，别直接用累计口径字段）、
+  合同负债同比与规模、OCF_TTM 与 `OCF_TTM ÷ NP_TTM`
+- **§4 盈利质量**：毛利率（**并拆分产品/地区，算各业务毛利额占比**）、净利率、
+  扣非占归母比、扣非增速 vs 归母增速缺口、ROE/ROA/ROIC、**股本占净资产比**（家底来源）、
+  **每股营收/每股经营现金流/每股净资产**（看穿股本扩张）
+- **§5 成长**：营收增速、净利增速、二者四象限定性、三费率、**费用增速 vs 营收增速**
+- **§6 现金流**：OCF、FCF、三流组合正负组合
+- **§7 资产质量**：货币资金占比、应收占营收/占总资产、存货周转天数、存货增速 vs 营收增速、
+  **营运资本占用（应收 + 存货 − 应付）与产业链地位**、在建工程趋势、商誉占净资产比、
+  **其他应收款占总资产比**
+- **§8 安全**：资产负债率（**剔合同负债**）、有息负债及其趋势、**毛利额 ÷ 利息费用**
+- **§9 护城河**：ROE/ROIC/毛利率/净现比各拉 **5 年序列**，看水平、稳定性、有无趋势性下移
+- **§3 估值**：静态/滚动/动态 PE 三者及**梯度解读**、PB、**经营性 PB**（剔理财与商誉）、
+  PEG、股息率、PE/PB 历史分位
+
+口径规则：
+- 同比要标清楚：**年报对年报，半年报对半年报**；
   单季 = 本期累计 − 上期累计；TTM = 本期累计 + 上年全年 − 上年同期累计。
 - **每个比率都要同时给分子分母的绝对额**，只给百分比等于没说。
+- 拿不到数据的项 → 判定写「无数据」，打分卡该项记 0 分，报告里写「暂无披露」。
 
 ### 第 3 步 · 研判
 
-按 `references/指标体系.md` 的**七步流程**走，并执行一票否决：
+按 `references/指标体系.md` §0 的**七步流程**走，每一步都要留痕（报告里的 `scorecard.steps`）：
 
 1. 验真伪 → 2. 看趋势 → 3. 查质量 → 4. 排雷 → 5. 定性质 → 6. 交叉验证 → 7. 问价格
 
-第 1 步（现金流）或第 4 步（安全）任一「高危」→ 直接否定；
-第 6 步故事讲不通（科目变动与收入毛利象限矛盾）→ 直接否定，不必再算估值。
+**必须完成的三件事（缺一不可）**：
+
+1. **逐条过 §12 排雷清单 25 条**，把命中的写进 `redflags`，每条都要给出证据数字。
+2. **跑 §10 科目变动矩阵**：先用「收入↑↓ × 毛利↑↓」定象限（A/B/C/D），
+   再逐行核对现金、应收周转天数、存货周转天数、三费、应付周转天数、长短借款、合同负债
+   这七类科目的变动是否"讲得通"。这一步的结果写进 `scorecard.steps` 第 6 步和 `conclusion`。
+3. **填 §13 打分卡**（16 项 × 权重），然后按**结论映射规则**推出 stance——
+   **不许拍脑袋定结论**：
+   - 第 1 步（现金流）或第 4 步（安全）任一「高危」→ **不看好**（一票否决）
+   - 第 6 步矩阵故事讲不通 → **不看好**（一票否决，不必再算估值）
+   - 总分显著为正 + 第 1、4 步过关 + 第 7 步不贵 → **看好**
+   - 第 5 步漂亮但第 7 步太贵 → **看好但等安全边际**（"好公司，但不是好股票"）
+   - 总分接近 0 或关键项落在关注档、方向未明 → **谨慎观望**
+   - 多数项「无数据」→ **谨慎观望**，并在报告中说明数据缺口
+
+**两个已知的机械口径陷阱，必须人工复核**：
+- **应收增速差**：营收塌方型企业会误报（应收绝对额没涨、营收大跌，差值反而大正）。
+  回看应收**绝对额**再定性。
+- **静态 PE 为负**：亏损年份的 PE_LYR 是负数，不代表便宜，只能看 PB 和 TTM。
 
 ### 第 4 步 · 撰写
 
 严格按 `references/解读范式.md` 的**六段式结构 + 句式模板**写。
 核心要求：
 
-- **有明确结论，不骑墙**（看好 / 谨慎观望 / 不看好 / 等安全边际）。
+- **有明确结论，不骑墙**（看好 / 谨慎观望 / 不看好 / 等安全边际），
+  stance 由第 3 步的打分卡映射推出，不是写文章时再想。
 - 每个判断后面必须跟数字；矛盾点（净利增但现金流降、毛利升但应收暴增）要指出来。
+- **资产负债表明细必须给全**（手册第 4 段的最低要求）：货币资金、短期借款、长期借款、
+  应收、存货、**应付账款**、在建工程、商誉、未分配利润、资产负债率。
+  拿不到的写「暂无披露」。
+- **生意那一段要说出产业链议价地位**（`应收 + 存货` 与 `应付` 谁大）——
+  这决定了公司是占用别人的钱做生意，还是自己垫资做生意。
 - 区分事实与推测：财报数字是事实；机构预测写「隐含的假设是…」；自己的判断写「这么看来…」。
 - 推演句式：「这么看来…」「这也说明…」「后续关键看 xxx，若 A 将 X，若 B 将 Y」。
 - **禁止**套话（未来可期 / 助力腾飞）与编造；**禁止**把主观感慨混进财务分析正文。
 
 ### 第 5 步 · 出报告
 
-把第 2–4 步的结果填进 JSON，跑渲染脚本：
+把第 2–4 步的结果填进 JSON，跑渲染脚本，**HTML 与 Markdown 两个格式都要出**：
 
 ```bash
 python3 <skill目录>/scripts/render_report.py data.json -o 报告.html
+python3 <skill目录>/scripts/render_md.py     data.json -o 报告.md
 ```
+
+两个脚本共用同一份 JSON，内容保持一致。Markdown 版不插任何图片，
+每张趋势图都用 `charts[].note` 里的文字读法重述，方便贴到纯文本环境。
 
 **JSON 字段清单**（全部可选，缺失的区块自动隐藏；完整示例见 `scripts/sample.json`）：
 
@@ -107,16 +149,36 @@ python3 <skill目录>/scripts/render_report.py data.json -o 报告.html
 |---|---|---|
 | `meta` | name / code / tagline / price / change_pct / market_cap / industry / report_date | 顶部横幅 |
 | `verdict` | stance / level(good·mid·bad·watch) / headline / summary / tags[] | 结论卡 |
-| `core_metrics` | [{label, value, note, flag(ok·warn·bad)}] | 指标卡墙 |
-| `price` | records[]（历史区间）/ chart_data[{label,value}] / comment | 股价位置 + SVG 走势图 |
-| `business` | intro / segments[{name,rev_pct,margin,comment}] / moat / policy / upstream / downstream | 生意本身 |
-| `trends` | years[] / series[{name,values[]}] / comment | 多年财务趋势表 |
-| `latest` | period / items[{label,value,yoy,note}] / signals[{name,state(pass·fail·na),result,reason}] | 最新财报 + 三项信号判定 |
-| `balance` | items[{label,value,note}] / risks[{name,value,level,threshold}] / comment | 资产负债 + 四项安全指标 |
-| `redflags` | [{level, text, evidence, hit}] | 排雷扫描（只列命中的） |
-| `scorecard` | steps[{no,name,state,conclusion}] / items[{dim,value,weight}] / total | 七步研判 + 评分条 |
-| `conclusion` | paragraphs[] / watchlist[] / triggers[] | 综合研判 + 跟踪清单 |
+| `price` | records[]（历史区间）/ chart_data[{label,value}] / comment | 一、股价位置 + SVG 走势图 |
+| `core_metrics` | [{label, value, note, flag(ok·warn·bad)}] | 二、核心指标与估值 |
+| `business` | intro / segments[{name,rev_pct,margin,comment}] / moat / policy / upstream / downstream | 三、生意本身 |
+| `financials` | **财务全景（合并块，见下表）** | 四、财务全景与跨年趋势研判 |
+| `redflags` | [{level, text, evidence, hit}] | 五、排雷扫描（只列命中的） |
+| `scorecard` | steps[{no,name,state,conclusion}] / items[{dim,value,weight}] / total | 六、七步研判 + 评分条 |
+| `conclusion` | paragraphs[] / watchlist[] / triggers[] | 七、综合研判 + 跟踪清单 |
 | `sources` | [{name, detail}] | 数据来源 |
+| `redflags_title` / `scorecard_title` / `conclusion_title` | 区块标题（含编号），缺省用「五、/六、/七、」 | 各区块标题 |
+
+**`financials` 子字段**（把旧版的 trends / latest / balance 三块合成一整块）：
+
+| 键 | 内容 |
+|---|---|
+| `title` / `lead` | 标题 + 导读（说明数据来源、期数、口径与反推方法） |
+| `periods` | 主表的期标签，**至少覆盖最近 2 年的全部季报**（10 期起） |
+| `quarterly_title` / `quarterly[]` / `quarterly_note` | 单季主表：每行 {name, values[]}，值与 periods 对齐，行数建议 16~20 |
+| `charts[]` | 每张图：{title, labels[], series[{name,type:bar·line,axis:l·r,color,values[]}], unit_l, unit_r, height, note}。**labels 必须给**，滚动四季图的 labels 与主表不同 |
+| `yoy` | {title, headers[], series[{name,values[]}], note} —— 同季同比对照，这是这家类公司唯一正确的读法 |
+| `cumulative` | {title, headers[], series[], note} —— 年报 / 中报累计口径的长镜头 |
+| `latest` | {title, period, comment, items[{label,value,yoy,note}], signals[{name,state,result,reason}]} —— 最新一期解读 + 三项改善信号 |
+| `balance` | {title, comment, items[{label,value,note}], risks[{name,value,level,threshold}]} —— 资产负债明细 + 四项安全判定 |
+| `insights_title` / `insights[]` | 跨年趋势归纳：每张卡 {tag, kind(ok·warn·bad), title, points[]}，**必须覆盖产品与价格、管理层口径（研发/费用）、营运资本、财务策略、现金流质量、股东回报、阅读方法等维度** |
+
+**财务全景的硬要求**：
+- 数据至少覆盖 **2 年以上的每个季报期**（≥10 期，建议拉满接口能给的 20+ 期做完整周期）；
+- 三层口径缺一不可：**单季**（本期累计 − 上期累计）、**滚动四季**（消季节性）、
+  **同季同比**（季节性强的公司环比会骗人）；
+- 每张图的 `note` 必须写出「图形读法」——Markdown 版唯一能呈现图表的方式就是这段文字；
+- 反推科目（应收、存货等）必须在行名与 `lead` 里注明「反推」。
 
 写完 JSON 后：**先自查一遍数字是否都能在取数结果里找到出处**，再跑脚本。
 跑完用浏览器或 `present_files` 打开交付。
@@ -136,7 +198,7 @@ python3 <skill目录>/scripts/render_report.py data.json -o 报告.html
 
 ## 输出与交付
 
-- 文件名建议：`{股票名称}-企业信息解读-{YYYYMMDD}.html`
+- 文件名建议：`{股票名称}-企业信息解读-{YYYYMMDD}.html` 与同名 `.md`，**两个都要交付**。
 - 交付时附一句话核心结论（stance + 最重要的一个理由），不要复述全文。
 - **免责声明必须保留**：报告基于公开数据整理，仅供参考，不构成投资建议。
 

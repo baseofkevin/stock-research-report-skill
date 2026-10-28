@@ -68,9 +68,17 @@ h3{
   font-family:"Noto Sans CJK SC",sans-serif; font-size:15.5px; margin:20px 0 9px;
   color:#3a4252;
 }
+h4{
+  font-family:"Noto Sans CJK SC",sans-serif; font-size:14px; margin:16px 0 7px;
+  color:#4a5464; font-weight:700;
+}
 p{margin:0 0 11px}
 p:last-child{margin-bottom:0}
 .muted{color:var(--sub)}
+.lead{
+  font-size:15px; line-height:1.85; background:#fbf8f4; border:1px solid #ece4d8;
+  border-radius:6px; padding:13px 16px; margin-bottom:18px;
+}
 
 /* ---------- 结论卡 ---------- */
 .verdict{border-left:5px solid var(--accent)}
@@ -104,9 +112,10 @@ p:last-child{margin-bottom:0}
 .m-note{font-size:12px; color:#7a8494; margin-top:4px; line-height:1.5}
 
 /* ---------- 表格 ---------- */
+.tbl-scroll{overflow-x:auto; margin:6px 0 4px; -webkit-overflow-scrolling:touch}
 table{
-  width:100%; border-collapse:collapse;
-  font-family:"Noto Sans CJK SC",sans-serif; font-size:13.5px; margin:6px 0 4px;
+  width:100%; border-collapse:collapse; min-width:520px;
+  font-family:"Noto Sans CJK SC",sans-serif; font-size:13.5px; margin:0;
 }
 th{
   background:#f2efe9; text-align:left; padding:9px 11px; font-weight:700;
@@ -119,6 +128,10 @@ tbody tr:hover{background:#fbfaf8}
 .up{color:var(--up); font-weight:600}
 .down{color:var(--down); font-weight:600}
 .center{text-align:center}
+td.rowhead{
+  font-weight:700; color:#3a4252; white-space:nowrap;
+  background:#fbfaf8; border-right:1px solid #eeebe5;
+}
 
 .lv{font-family:"Noto Sans CJK SC",sans-serif; font-size:12px; font-weight:700;
     padding:2px 9px; border-radius:3px; color:#fff; white-space:nowrap}
@@ -152,6 +165,31 @@ tbody tr:hover{background:#fbfaf8}
 /* ---------- 走势图 ---------- */
 .chart-box{border:1px solid var(--line); border-radius:6px; padding:14px; background:#fcfbfa}
 .chart-box svg{width:100%; height:auto; display:block}
+.chart-note{font-size:12.5px; color:var(--sub); margin-top:10px; line-height:1.7}
+
+/* ---------- 归纳卡 ---------- */
+.insights{display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.insight{
+  border:1px solid var(--line); border-radius:6px; padding:13px 15px; background:#fcfbfa;
+  border-top:3px solid var(--accent);
+}
+.insight.warn{border-top-color:var(--mid)}
+.insight.bad{border-top-color:var(--risk)}
+.insight.ok{border-top-color:var(--ok)}
+.i-head{
+  font-family:"Noto Sans CJK SC",sans-serif; font-weight:700; font-size:14px;
+  margin-bottom:7px; color:#2b3140;
+}
+.i-tag{
+  font-size:11.5px; color:#fff; background:var(--accent); padding:2px 8px;
+  border-radius:3px; margin-right:7px; vertical-align:1px;
+}
+.insight.warn .i-tag{background:var(--mid)}
+.insight.bad .i-tag{background:var(--risk)}
+.insight.ok .i-tag{background:var(--ok)}
+ul.i-list{padding-left:19px; margin:0; font-size:13.5px; line-height:1.75}
+ul.i-list li{margin-bottom:6px}
+ul.i-list li:last-child{margin-bottom:0}
 
 /* ---------- 结论 ---------- */
 .concl p{margin-bottom:13px; text-align:justify}
@@ -173,6 +211,7 @@ footer{
 @media print{
   body{background:#fff} .hero{background:#8b1a1a !important; -webkit-print-color-adjust:exact}
   section{box-shadow:none; page-break-inside:avoid} .wrap{max-width:100%}
+  .tbl-scroll{overflow:visible}
 }
 @media (max-width:640px){
   .hero h1{font-size:23px} .hero-metrics{gap:20px} .wrap{padding:0 14px 40px}
@@ -211,6 +250,9 @@ def cls_num(s: Any) -> str:
     return ""
 
 
+# ---------------------------------------------------------------- 图表
+
+
 def svg_chart(points: list[dict], unit: str = "元") -> str:
     """用季度收盘价画一张简洁的折线面积图。"""
     vals = [float(p["value"]) for p in points if p.get("value") is not None]
@@ -242,7 +284,6 @@ def svg_chart(points: list[dict], unit: str = "元") -> str:
         '<stop offset="100%" stop-color="#8b1a1a" stop-opacity=".02"/>'
         "</linearGradient></defs>",
     ]
-    # 网格与纵轴刻度
     for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
         yy = pad_t + (h - pad_t - pad_b) * frac
         vv = hi - rng * frac
@@ -257,17 +298,14 @@ def svg_chart(points: list[dict], unit: str = "元") -> str:
         f'<polyline points="{line}" fill="none" stroke="#8b1a1a" '
         f'stroke-width="2.2" stroke-linejoin="round"/>'
     )
-    # 末点强调
     parts.append(
         f'<circle cx="{x(len(vals) - 1):.1f}" cy="{y(vals[-1]):.1f}" r="4" '
         f'fill="#fff" stroke="#8b1a1a" stroke-width="2.2"/>'
     )
-    # 首末数值标注
     parts.append(
         f'<text x="{x(len(vals) - 1):.1f}" y="{y(vals[-1]) - 11:.1f}" text-anchor="end" '
         f'font-size="12.5" font-weight="700" fill="#8b1a1a">{vals[-1]:.2f}{unit}</text>'
     )
-    # 横轴标签（稀疏显示）
     step = max(1, len(labels) // 9)
     for i, lb in enumerate(labels):
         if i % step == 0 or i == len(labels) - 1:
@@ -275,6 +313,186 @@ def svg_chart(points: list[dict], unit: str = "元") -> str:
                 f'<text x="{x(i):.1f}" y="{h - pad_b + 17}" text-anchor="middle" '
                 f'font-size="11" fill="#8b93a1">{html.escape(lb)}</text>'
             )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+PALETTE = ["#8b1a1a", "#2a6099", "#1e8449", "#c77f08", "#6b4c9a", "#0f7d82"]
+
+
+def svg_multi(labels: list, series: list, unit_l: str = "", unit_r: str = "",
+              height: int = 300) -> str:
+    """多序列组合图：柱（左轴）+ 折线（可走右轴）。
+
+    series 每项：{name, type:'bar'|'line', values[], axis:'l'|'r', color?}
+    """
+    if not labels or not series:
+        return ""
+    clean = []
+    for s in series:
+        vals = [float(v) if isinstance(v, (int, float)) else None for v in s.get("values") or []]
+        if any(v is not None for v in vals):
+            clean.append({**s, "_v": vals})
+    if not clean:
+        return ""
+
+    n = len(labels)
+    w = 980
+    pad_l, pad_r, pad_t, pad_b = 60, 60, 16, 34
+    legend_h = 24
+    plot_h = height - pad_t - pad_b - legend_h
+
+    def collect(axis: str) -> list[float]:
+        out = []
+        for s in clean:
+            if (s.get("axis") or "l") == axis:
+                out += [v for v in s["_v"] if v is not None]
+        return out
+
+    def rng(vs: list[float]) -> tuple[float, float]:
+        if not vs:
+            return 0.0, 1.0
+        lo, hi = min(vs), max(vs)
+        if lo == hi:
+            lo, hi = lo - 1, hi + 1
+        if lo > 0 and lo / abs(hi) < 0.5:
+            lo = 0.0
+        span = (hi - lo) or 1.0
+        return lo - span * 0.12, hi + span * 0.15
+
+    lo_l, hi_l = rng(collect("l"))
+    lo_r, hi_r = rng(collect("r"))
+    has_r = any((s.get("axis") or "l") == "r" for s in clean)
+
+    slot = (w - pad_l - pad_r) / n
+
+    def xc(i: int) -> float:
+        return pad_l + slot * (i + 0.5)
+
+    def yy(v: float, axis: str) -> float:
+        lo, hi = (lo_r, hi_r) if axis == "r" else (lo_l, hi_l)
+        return pad_t + plot_h * (hi - v) / (hi - lo)
+
+    def fmt(v: float) -> str:
+        a = abs(v)
+        if a >= 1000:
+            return f"{v:,.0f}"
+        if a >= 100:
+            return f"{v:.0f}"
+        return f"{v:.1f}"
+
+    parts = [f'<svg viewBox="0 0 {w} {height}" role="img" aria-label="趋势图">']
+    # 横向网格 + 左右轴刻度
+    for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
+        gy = pad_t + plot_h * frac
+        parts.append(
+            f'<line x1="{pad_l}" y1="{gy:.1f}" x2="{w - pad_r}" y2="{gy:.1f}" '
+            f'stroke="#e6e3dd" stroke-width="1"/>'
+        )
+        vl = hi_l - (hi_l - lo_l) * frac
+        parts.append(
+            f'<text x="{pad_l - 7}" y="{gy + 4:.1f}" text-anchor="end" '
+            f'font-size="10.5" fill="#8b93a1">{fmt(vl)}</text>'
+        )
+        if has_r:
+            vr = hi_r - (hi_r - lo_r) * frac
+            parts.append(
+                f'<text x="{w - pad_r + 7}" y="{gy + 4:.1f}" text-anchor="start" '
+                f'font-size="10.5" fill="#8b93a1">{fmt(vr)}</text>'
+            )
+    # 零轴
+    if lo_l < 0 < hi_l:
+        zy = yy(0, "l")
+        parts.append(
+            f'<line x1="{pad_l}" y1="{zy:.1f}" x2="{w - pad_r}" y2="{zy:.1f}" '
+            f'stroke="#b9b3aa" stroke-width="1.2" stroke-dasharray="4 3"/>'
+        )
+
+    bars = [s for s in clean if (s.get("type") or "line") == "bar"]
+    lines = [s for s in clean if (s.get("type") or "line") == "line"]
+    nb = len(bars)
+    bw = (slot * 0.62) / max(nb, 1)
+
+    for bi, s in enumerate(bars):
+        color = s.get("color") or PALETTE[bi % len(PALETTE)]
+        off = -slot * 0.31 + bw * bi + (slot * 0.62 - bw * nb) / 2
+        for i, v in enumerate(s["_v"]):
+            if v is None:
+                continue
+            top = yy(v, s.get("axis") or "l")
+            base = yy(0 if lo_l < 0 else lo_l, "l")
+            parts.append(
+                f'<rect x="{xc(i) + off:.1f}" y="{min(top, base):.1f}" '
+                f'width="{bw:.1f}" height="{abs(base - top):.1f}" rx="2" '
+                f'fill="{color}" opacity=".82"/>'
+            )
+
+    for li, s in enumerate(lines):
+        color = s.get("color") or PALETTE[(li + 2) % len(PALETTE)]
+        axis = s.get("axis") or "l"
+        pts = [(xc(i), yy(v, axis)) for i, v in enumerate(s["_v"]) if v is not None]
+        idx = [i for i, v in enumerate(s["_v"]) if v is not None]
+        dash = ' stroke-dasharray="6 3"' if s.get("dashed") else ""
+        parts.append(
+            '<polyline points="'
+            + " ".join(f"{px:.1f},{py:.1f}" for px, py in pts)
+            + f'" fill="none" stroke="{color}" stroke-width="2.4" '
+            f'stroke-linejoin="round"{dash}/>'
+        )
+        for i, (px, py) in zip(idx, pts):
+            parts.append(
+                f'<circle cx="{px:.1f}" cy="{py:.1f}" r="3.4" fill="#fff" '
+                f'stroke="{color}" stroke-width="2"/>'
+            )
+        # 末值标注
+        if pts:
+            px, py = pts[-1]
+            parts.append(
+                f'<text x="{px:.1f}" y="{py - 9:.1f}" text-anchor="middle" '
+                f'font-size="11" font-weight="700" fill="{color}">'
+                f'{fmt(s["_v"][idx[-1]])}</text>'
+            )
+
+    # 横轴标签
+    step = max(1, n // 11)
+    for i, lb in enumerate(labels):
+        if i % step == 0 or i == n - 1:
+            parts.append(
+                f'<text x="{xc(i):.1f}" y="{pad_t + plot_h + 17}" text-anchor="middle" '
+                f'font-size="10.5" fill="#8b93a1">{html.escape(str(lb))}</text>'
+            )
+
+    # 图例
+    total_w = sum(58 + len(str(s.get("name", ""))) * 13 for s in clean)
+    lx = (w - total_w) / 2
+    ly = height - 8
+    for si, s in enumerate(clean):
+        color = s.get("color") or PALETTE[si % len(PALETTE)]
+        name = str(s.get("name", ""))
+        if (s.get("type") or "line") == "bar":
+            parts.append(f'<rect x="{lx:.1f}" y="{ly - 8:.1f}" width="11" height="11" rx="2" fill="{color}"/>')
+        else:
+            parts.append(
+                f'<line x1="{lx:.1f}" y1="{ly - 3:.1f}" x2="{lx + 11:.1f}" y2="{ly - 3:.1f}" '
+                f'stroke="{color}" stroke-width="2.6"/>'
+            )
+        parts.append(
+            f'<text x="{lx + 16:.1f}" y="{ly + 2:.1f}" font-size="11.5" '
+            f'fill="#5b6472">{html.escape(name)}</text>'
+        )
+        lx += 58 + len(name) * 13
+
+    # 轴单位
+    if unit_l:
+        parts.append(
+            f'<text x="{pad_l - 7}" y="{pad_t - 4:.1f}" text-anchor="end" '
+            f'font-size="10" fill="#a6adba">{html.escape(unit_l)}</text>'
+        )
+    if unit_r and has_r:
+        parts.append(
+            f'<text x="{w - pad_r + 7}" y="{pad_t - 4:.1f}" text-anchor="start" '
+            f'font-size="10" fill="#a6adba">{html.escape(unit_r)}</text>'
+        )
     parts.append("</svg>")
     return "".join(parts)
 
@@ -333,7 +551,7 @@ def sec_price(data: dict) -> str:
     rows = data.get("records") or []
     if rows:
         out.append(
-            "<table><thead><tr><th>周期</th><th>最高 / 最低</th>"
+            "<div class='tbl-scroll'><table><thead><tr><th>周期</th><th>最高 / 最低</th>"
             "<th>说明</th></tr></thead><tbody>"
         )
         for r in rows:
@@ -342,7 +560,7 @@ def sec_price(data: dict) -> str:
                 f"<td class='num'>{esc(r.get('range'))}</td>"
                 f"<td>{esc(r.get('note'))}</td></tr>"
             )
-        out.append("</tbody></table>")
+        out.append("</tbody></table></div>")
     if data.get("chart_data"):
         title = data.get("chart_title", "季度收盘走势")
         unit = data.get("unit", "元")
@@ -366,7 +584,7 @@ def sec_business(b: dict) -> str:
     segs = b.get("segments") or []
     if segs:
         out.append(
-            "<table><thead><tr><th>业务板块</th><th>营收占比</th>"
+            "<div class='tbl-scroll'><table><thead><tr><th>业务板块</th><th>营收占比</th>"
             "<th>毛利率</th><th>点评</th></tr></thead><tbody>"
         )
         for s in segs:
@@ -376,7 +594,7 @@ def sec_business(b: dict) -> str:
                 f"<td class='num'>{esc(s.get('margin'))}</td>"
                 f"<td>{esc(s.get('comment'))}</td></tr>"
             )
-        out.append("</tbody></table>")
+        out.append("</tbody></table></div>")
     for key, title in (("moat", "护城河"), ("policy", "行业与政策"),
                        ("upstream", "上游"), ("downstream", "下游")):
         if b.get(key):
@@ -387,14 +605,188 @@ def sec_business(b: dict) -> str:
     return "".join(out)
 
 
+def _matrix_table(headers: list, series: list, first_col: str = "指标",
+                  colorize: bool = True) -> str:
+    """通用「首列 + 若干期」矩阵表。series 每项 {name, values[], note?}。"""
+    if not headers or not series:
+        return ""
+    out = [
+        "<div class='tbl-scroll'><table><thead><tr>"
+        f"<th>{esc(first_col)}</th>"
+    ]
+    out += [f"<th class='center'>{esc(h)}</th>" for h in headers]
+    out.append("</tr></thead><tbody>")
+    for s in series:
+        out.append(f"<tr><td class='rowhead'>{esc(s.get('name'))}</td>")
+        for v in s.get("values") or []:
+            cls = cls_num(v) if colorize else ""
+            out.append(f"<td class='num center {cls}'>{esc(v)}</td>")
+        # 补齐列数，避免表格错位
+        missing = len(headers) - len(s.get("values") or [])
+        out += ["<td class='num center'>—</td>"] * max(missing, 0)
+        out.append("</tr>")
+    out.append("</tbody></table></div>")
+    return "".join(out)
+
+
+def sec_financials(f: dict) -> str:
+    """财务全景与跨年趋势研判（合并原「多年趋势 + 最新财报 + 资产负债」三块）。"""
+    if not f:
+        return ""
+    out = [f"<section><h2>{esc(f.get('title') or '财务全景与跨年趋势研判')}</h2>"]
+    if f.get("lead"):
+        out.append(f"<p class='lead'>{esc(f['lead'])}</p>")
+
+    # --- 1. 季度主表 ---
+    periods = f.get("periods") or []
+    qt = f.get("quarterly") or []
+    if periods and qt:
+        out.append(f"<h3>{esc(f.get('quarterly_title') or '① 季度主表（单季口径）')}</h3>")
+        out.append(_matrix_table(periods, qt))
+        if f.get("quarterly_note"):
+            out.append(f"<p class='muted' style='margin-top:8px'>{esc(f['quarterly_note'])}</p>")
+
+    # --- 2. 趋势图 ---
+    charts = f.get("charts") or []
+    for idx, ch in enumerate(charts):
+        labels = ch.get("labels") or periods
+        svg = svg_multi(labels, ch.get("series") or [],
+                        ch.get("unit_l", ""), ch.get("unit_r", ""),
+                        int(ch.get("height", 300)))
+        if not svg:
+            continue
+        out.append(f"<h3>{esc(ch.get('title') or f'趋势图 {idx + 1}')}</h3>")
+        out.append(f'<div class="chart-box">{svg}</div>')
+        if ch.get("note"):
+            out.append(f"<p class='chart-note'>{esc(ch['note'])}</p>")
+
+    # --- 3. 同季同比 ---
+    yoy = f.get("yoy") or {}
+    if yoy.get("headers"):
+        out.append(f"<h3>{esc(yoy.get('title') or '② 同季同比对照')}</h3>")
+        out.append(_matrix_table(yoy["headers"], yoy.get("series") or [],
+                                 yoy.get("first_col", "对照项")))
+        if yoy.get("note"):
+            out.append(f"<p class='muted' style='margin-top:8px'>{esc(yoy['note'])}</p>")
+
+    # --- 4. 累计口径（年报/中报） ---
+    cum = f.get("cumulative") or {}
+    if cum.get("headers") and cum.get("series"):
+        out.append(f"<h3>{esc(cum.get('title') or '③ 累计口径（年报 / 中报）')}</h3>")
+        out.append(_matrix_table(cum["headers"], cum["series"], cum.get("first_col", "指标")))
+        if cum.get("note"):
+            out.append(f"<p class='muted' style='margin-top:8px'>{esc(cum['note'])}</p>")
+
+    # --- 5. 最新一期财报 ---
+    lat = f.get("latest") or {}
+    if lat:
+        out.append(
+            f"<h3>{esc(lat.get('title') or '④ 最新一期财报')}"
+            f"（{esc(lat.get('period'))}）</h3>"
+            if lat.get("period") else
+            f"<h3>{esc(lat.get('title') or '④ 最新一期财报')}</h3>"
+        )
+        if lat.get("comment"):
+            out.append(f"<p>{esc(lat['comment'])}</p>")
+        items = lat.get("items") or []
+        if items:
+            out.append(
+                "<div class='tbl-scroll'><table><thead><tr><th>项目</th>"
+                "<th class='center'>数值</th><th class='center'>同比</th>"
+                "<th>说明</th></tr></thead><tbody>"
+            )
+            for it in items:
+                out.append(
+                    f"<tr><td>{esc(it.get('label'))}</td>"
+                    f"<td class='num center'>{esc(it.get('value'))}</td>"
+                    f"<td class='num center {cls_num(it.get('yoy'))}'>{esc(it.get('yoy'))}</td>"
+                    f"<td>{esc(it.get('note'))}</td></tr>"
+                )
+            out.append("</tbody></table></div>")
+        sigs = lat.get("signals") or []
+        if sigs:
+            out.append("<h4>三项改善信号判定</h4>")
+            for s in sigs:
+                st = str(s.get("state", "na")).lower()
+                out.append(
+                    f'<div class="signal {st}">'
+                    f'<div class="s-name">{esc(s.get("name"))}</div>'
+                    f'<div class="s-body">{esc(s.get("result"))}'
+                    f'<div class="s-reason">{esc(s.get("reason"))}</div></div>'
+                    "</div>"
+                )
+
+    # --- 6. 资产负债表 + 安全指标 ---
+    bs = f.get("balance") or {}
+    if bs:
+        out.append(f"<h3>{esc(bs.get('title') or '⑤ 资产负债与安全边际')}</h3>")
+        if bs.get("comment"):
+            out.append(f"<p>{esc(bs['comment'])}</p>")
+        items = bs.get("items") or []
+        if items:
+            out.append(
+                "<div class='tbl-scroll'><table><thead><tr><th>科目</th>"
+                "<th class='center'>金额</th><th>说明</th></tr></thead><tbody>"
+            )
+            for it in items:
+                out.append(
+                    f"<tr><td>{esc(it.get('label'))}</td>"
+                    f"<td class='num center'>{esc(it.get('value'))}</td>"
+                    f"<td>{esc(it.get('note'))}</td></tr>"
+                )
+            out.append("</tbody></table></div>")
+        risks = bs.get("risks") or []
+        if risks:
+            out.append("<h4>四项安全判定</h4>")
+            out.append(
+                "<div class='tbl-scroll'><table><thead><tr><th>指标</th>"
+                "<th class='center'>数值</th><th class='center'>判定</th>"
+                "<th>阈值与说明</th></tr></thead><tbody>"
+            )
+            lv_map = {"高危": "lv-high", "危险": "lv-high", "关注": "lv-mid",
+                      "紧张": "lv-mid", "正常": "lv-ok", "健康": "lv-ok",
+                      "优秀": "lv-ok", "良好": "lv-ok", "无数据": "lv-na"}
+            for r in risks:
+                lv = str(r.get("level", "无数据"))
+                cls = next((v for k, v in lv_map.items() if lv.startswith(k)), "lv-na")
+                out.append(
+                    f"<tr><td>{esc(r.get('name'))}</td>"
+                    f"<td class='num center'>{esc(r.get('value'))}</td>"
+                    f"<td class='center'><span class='lv {cls}'>{esc(lv)}</span></td>"
+                    f"<td>{esc(r.get('threshold'))}</td></tr>"
+                )
+            out.append("</tbody></table></div>")
+
+    # --- 7. 趋势归纳 ---
+    ins = f.get("insights") or []
+    if ins:
+        out.append(f"<h3>{esc(f.get('insights_title') or '⑥ 跨年趋势归纳')}</h3>")
+        out.append('<div class="insights">')
+        for it in ins:
+            kind = it.get("kind", "")
+            tag = it.get("tag") or it.get("dim") or ""
+            out.append(
+                f'<div class="insight {kind}">'
+                f'<div class="i-head"><span class="i-tag">{esc(tag)}</span>'
+                f'{esc(it.get("title"))}</div><ul class="i-list">'
+            )
+            for p in it.get("points") or []:
+                out.append(f"<li>{esc(p)}</li>")
+            out.append("</ul></div>")
+        out.append("</div>")
+
+    out.append("</section>")
+    return "".join(out)
+
+
 def sec_trends(t: dict) -> str:
-    """多年财务趋势表。"""
+    """多年财务趋势表（旧版独立区块，保留兼容）。"""
     if not t or not (t.get("series") and t.get("years")):
         return ""
     years = t["years"]
     out = [
         f"<section><h2>{esc(t.get('title', '多年财务趋势'))}</h2>",
-        "<table><thead><tr><th>指标</th>",
+        "<div class='tbl-scroll'><table><thead><tr><th>指标</th>",
     ]
     for y in years:
         out.append(f"<th class='center'>{esc(y)}</th>")
@@ -405,7 +797,7 @@ def sec_trends(t: dict) -> str:
         for v in vals:
             out.append(f"<td class='num center'>{esc(v)}</td>")
         out.append("</tr>")
-    out.append("</tbody></table>")
+    out.append("</tbody></table></div>")
     if t.get("comment"):
         out.append(f"<p style='margin-top:12px'>{esc(t['comment'])}</p>")
     out.append("</section>")
@@ -413,7 +805,7 @@ def sec_trends(t: dict) -> str:
 
 
 def sec_latest(l: dict) -> str:
-    """最新一期财报解读。"""
+    """最新一期财报解读（旧版独立区块，保留兼容）。"""
     if not l:
         return ""
     out = [f"<section><h2>四、最新财报解读（{esc(l.get('period'))}）</h2>"]
@@ -422,8 +814,9 @@ def sec_latest(l: dict) -> str:
     items = l.get("items") or []
     if items:
         out.append(
-            "<table><thead><tr><th>项目</th><th class='center'>数值</th>"
-            "<th class='center'>同比</th><th>说明</th></tr></thead><tbody>"
+            "<div class='tbl-scroll'><table><thead><tr><th>项目</th>"
+            "<th class='center'>数值</th><th class='center'>同比</th>"
+            "<th>说明</th></tr></thead><tbody>"
         )
         for it in items:
             out.append(
@@ -432,7 +825,7 @@ def sec_latest(l: dict) -> str:
                 f"<td class='num center {cls_num(it.get('yoy'))}'>{esc(it.get('yoy'))}</td>"
                 f"<td>{esc(it.get('note'))}</td></tr>"
             )
-        out.append("</tbody></table>")
+        out.append("</tbody></table></div>")
     sigs = l.get("signals") or []
     if sigs:
         out.append("<h3>三项改善信号判定</h3>")
@@ -450,7 +843,7 @@ def sec_latest(l: dict) -> str:
 
 
 def sec_balance(bs: dict) -> str:
-    """资产负债表明细 + 安全指标。"""
+    """资产负债表明细 + 安全指标（旧版独立区块，保留兼容）。"""
     if not bs:
         return ""
     out = ["<section><h2>五、资产负债与安全边际</h2>"]
@@ -459,8 +852,8 @@ def sec_balance(bs: dict) -> str:
     items = bs.get("items") or []
     if items:
         out.append(
-            "<table><thead><tr><th>科目</th><th class='center'>金额</th>"
-            "<th>说明</th></tr></thead><tbody>"
+            "<div class='tbl-scroll'><table><thead><tr><th>科目</th>"
+            "<th class='center'>金额</th><th>说明</th></tr></thead><tbody>"
         )
         for it in items:
             out.append(
@@ -468,13 +861,14 @@ def sec_balance(bs: dict) -> str:
                 f"<td class='num center'>{esc(it.get('value'))}</td>"
                 f"<td>{esc(it.get('note'))}</td></tr>"
             )
-        out.append("</tbody></table>")
+        out.append("</tbody></table></div>")
     risks = bs.get("risks") or []
     if risks:
         out.append("<h3>四项安全指标</h3>")
         out.append(
-            "<table><thead><tr><th>指标</th><th class='center'>数值</th>"
-            "<th class='center'>判定</th><th>阈值与说明</th></tr></thead><tbody>"
+            "<div class='tbl-scroll'><table><thead><tr><th>指标</th>"
+            "<th class='center'>数值</th><th class='center'>判定</th>"
+            "<th>阈值与说明</th></tr></thead><tbody>"
         )
         lv_map = {"高危": "lv-high", "关注": "lv-mid", "紧张": "lv-mid",
                   "正常": "lv-ok", "健康": "lv-ok", "无数据": "lv-na"}
@@ -487,24 +881,24 @@ def sec_balance(bs: dict) -> str:
                 f"<td class='center'><span class='lv {cls}'>{esc(lv)}</span></td>"
                 f"<td>{esc(r.get('threshold'))}</td></tr>"
             )
-        out.append("</tbody></table>")
+        out.append("</tbody></table></div>")
     out.append("</section>")
     return "".join(out)
 
 
-def sec_redflags(items: list[dict]) -> str:
+def sec_redflags(items: list[dict], title: str = "排雷扫描") -> str:
     if not items:
         return ""
     hits = [r for r in items if r.get("hit")]
     out = [
-        f"<section><h2>六、排雷扫描（命中 {len(hits)} / {len(items)} 项）</h2>",
+        f"<section><h2>{esc(title)}（命中 {len(hits)} / {len(items)} 项）</h2>",
     ]
     if not hits:
         out.append("<p>暂未命中已知的高危组合信号。</p>")
     else:
         out.append(
-            "<table><thead><tr><th class='center'>等级</th><th>信号</th>"
-            "<th>依据</th></tr></thead><tbody>"
+            "<div class='tbl-scroll'><table><thead><tr><th class='center'>等级</th>"
+            "<th>信号</th><th>依据</th></tr></thead><tbody>"
         )
         lv_map = {"高危": "lv-high", "危险": "lv-high", "关注": "lv-mid",
                   "警告": "lv-mid", "留意": "lv-mid"}
@@ -516,21 +910,21 @@ def sec_redflags(items: list[dict]) -> str:
                 f"<td>{esc(r.get('text'))}</td>"
                 f"<td class='muted'>{esc(r.get('evidence'))}</td></tr>"
             )
-        out.append("</tbody></table>")
+        out.append("</tbody></table></div>")
     out.append("</section>")
     return "".join(out)
 
 
-def sec_scorecard(sc: dict) -> str:
+def sec_scorecard(sc: dict, title: str = "七步研判") -> str:
     """七步研判结论 + 加权评分条。"""
     if not sc:
         return ""
-    out = ["<section><h2>七、七步研判</h2>"]
+    out = [f"<section><h2>{esc(title)}</h2>"]
     steps = sc.get("steps") or []
     if steps:
         out.append(
-            "<table><thead><tr><th class='center'>步</th><th>维度</th>"
-            "<th class='center'>结论</th><th>要点</th></tr></thead><tbody>"
+            "<div class='tbl-scroll'><table><thead><tr><th class='center'>步</th>"
+            "<th>维度</th><th class='center'>结论</th><th>要点</th></tr></thead><tbody>"
         )
         st_map = {"pass": "lv-ok", "fail": "lv-high", "warn": "lv-mid", "na": "lv-na"}
         txt_map = {"pass": "通过", "fail": "否决", "warn": "存疑", "na": "无数据"}
@@ -544,7 +938,7 @@ def sec_scorecard(sc: dict) -> str:
                 f"<td class='center'><span class='lv {cls}'>{esc(txt)}</span></td>"
                 f"<td>{esc(s.get('conclusion'))}</td></tr>"
             )
-        out.append("</tbody></table>")
+        out.append("</tbody></table></div>")
     items = sc.get("items") or []
     if items:
         out.append("<h3>加权评分</h3>")
@@ -568,10 +962,10 @@ def sec_scorecard(sc: dict) -> str:
     return "".join(out)
 
 
-def sec_conclusion(c: dict) -> str:
+def sec_conclusion(c: dict, title: str = "综合研判") -> str:
     if not c:
         return ""
-    out = ["<section class='concl'><h2>八、综合研判</h2>"]
+    out = [f"<section class='concl'><h2>{esc(title)}</h2>"]
     for p in c.get("paragraphs") or []:
         out.append(f"<p>{esc(p)}</p>")
     if c.get("watchlist"):
@@ -588,10 +982,10 @@ def sec_conclusion(c: dict) -> str:
     return "".join(out)
 
 
-def sec_sources(items: list) -> str:
+def sec_sources(items: list, title: str = "数据来源与口径") -> str:
     if not items:
         return ""
-    out = ["<section><h2>数据来源与口径</h2><div class='src'>"]
+    out = [f"<section><h2>{esc(title)}</h2><div class='src'>"]
     for s in items:
         name = s.get("name") if isinstance(s, dict) else s
         detail = s.get("detail") if isinstance(s, dict) else ""
@@ -635,18 +1029,28 @@ def build_hero(m: dict) -> str:
 def render(data: dict) -> str:
     m = data.get("meta") or {}
     title = f'{m.get("name", "个股")}（{m.get("code", "")}）企业信息解读'
+    has_new = bool(data.get("financials"))
     body = "".join([
         build_hero(m),
         sec_verdict(data.get("verdict") or {}),
-        sec_metrics("二、核心指标", data.get("core_metrics") or []),
+        # 顺序与编号、与笔记范式一致：先看股价位置，再看估值，再看生意，最后看财务
         sec_price(data.get("price") or {}),
+        sec_metrics("二、核心指标与估值", data.get("core_metrics") or []),
         sec_business(data.get("business") or {}),
-        sec_trends(data.get("trends") or {}),
-        sec_latest(data.get("latest") or {}),
-        sec_balance(data.get("balance") or {}),
-        sec_redflags(data.get("redflags") or []),
-        sec_scorecard(data.get("scorecard") or {}),
-        sec_conclusion(data.get("conclusion") or {}),
+        # 新版：财务全景（合并多年趋势 / 最新财报 / 资产负债）
+        sec_financials(data.get("financials") or {}),
+        # 旧版三块：仅在未提供 financials 时输出
+        *(([] if has_new else [
+            sec_trends(data.get("trends") or {}),
+            sec_latest(data.get("latest") or {}),
+            sec_balance(data.get("balance") or {}),
+        ])),
+        sec_redflags(data.get("redflags") or [],
+                     data.get("redflags_title") or "五、排雷扫描"),
+        sec_scorecard(data.get("scorecard") or {},
+                      data.get("scorecard_title") or "六、七步研判"),
+        sec_conclusion(data.get("conclusion") or {},
+                       data.get("conclusion_title") or "七、综合研判"),
         sec_sources(data.get("sources") or []),
     ])
     date_line = ""
