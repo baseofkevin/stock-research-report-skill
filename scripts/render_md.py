@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -357,20 +358,29 @@ def b_scorecard(sc: dict, title: str = "七步研判") -> str:
     items = sc.get("items") or []
     if items:
         out.append("**加权评分**\n")
-        rows = [[t(i.get("dim")), f"{float(i.get('value', 0)):+.0f}",
-                 f"×{t(i.get('weight'))}", str(round(
-                     float(i.get("value", 0)) * float(i.get("weight", 1)), 1))]
-                for i in items]
+        rows = []
+        for i in items:
+            v = i.get("value")
+            if v is None:                       # 不可评（数据缺口）：不计分、不进分母
+                rows.append([t(i.get("dim")), "不可评", f"×{t(i.get('weight'))}",
+                             "—（缺数据，不计入分母）"])
+            else:
+                rows.append([t(i.get("dim")), f"{float(v):+.0f}",
+                             f"×{t(i.get('weight'))}",
+                             str(round(float(v) * float(i.get("weight", 1)), 1))])
         out += [md_table(["维度", "分值", "权重", "加权"], rows, "lccc"), ""]
-        total = sum(float(i.get("value", 0)) * float(i.get("weight", 1)) for i in items)
-        maxv = sum(abs(float(i.get("weight", 1))) * 2 for i in items)
+        scored = [i for i in items if i.get("value") is not None]
+        total = sum(float(i["value"]) * float(i.get("weight", 1)) for i in scored)
+        maxv = sum(abs(float(i.get("weight", 1))) * 2 for i in scored)
         line = f"**加权总分：{total:+.0f} / 满分 {maxv:.0f}**"
         declared = sc.get("total")
         if declared:
-            import re as _re
-            m2 = _re.match(r"\s*([+-]?\d+)", str(declared))
+            m2 = re.match(r"\s*([+-]?\d+)", str(declared))
             if not m2 or abs(int(m2.group(1)) - total) > 0.5:
                 line += f"（⚠ 与 JSON 标注值 {t(declared)} 不一致，以实算为准）"
+        if len(scored) < len(items):
+            rate = (total / maxv * 100) if maxv else 0
+            line += f"（可评 {len(scored)} / {len(items)} 项，归一化得分率 {rate:.1f}%）"
         out += [line, ""]
         if sc.get("total_note"):
             out += [t(sc["total_note"]), ""]

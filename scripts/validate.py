@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -62,6 +63,10 @@ def check(path: Path, rep: Report) -> None:
     for k in ("name", "code", "price", "report_date"):
         if not m.get(k):
             rep.err(f"meta.{k} 缺失")
+    code = str(m.get("code") or "")
+    if code and not re.match(r"^(sh|sz|bj)\d{6}$", code):
+        rep.err(f"meta.code={code!r} 不是 A 股代码（应为 sh/sz/bj + 6 位数字）；"
+                f"本 skill 不覆盖港股（hk）/美股（us）")
     if not m.get("price_at"):
         rep.warn("meta.price_at 缺失——盘中价出报告时必须写清行情时点，否则估值不可复现")
     elif m.get("chg_note") and m["price_at"] not in str(m["chg_note"]):
@@ -71,6 +76,13 @@ def check(path: Path, rep: Report) -> None:
     cm = data.get("core_metrics") or []
     if len(cm) < 8:
         rep.warn(f"core_metrics 只有 {len(cm)} 项，建议 ≥10（含静态/滚动/动态 PE、PB、经营性 PB、股息率、ROE/ROA/ROIC）")
+    for it in cm:
+        if it.get("flag") not in (None, "", "ok", "warn", "bad"):
+            rep.err(f"core_metrics「{it.get('label')}」flag={it.get('flag')!r}，"
+                    f"只能是 ok / warn / bad（错值会静默套默认灰样式）")
+    v = data.get("verdict") or {}
+    if v.get("level") not in (None, "", "good", "mid", "bad", "watch"):
+        rep.err(f"verdict.level={v.get('level')!r}，只能是 good / mid / bad / watch")
     labels = " ".join(str(x.get("label", "")) for x in cm)
     for need in ("静态 PE", "滚动 PE", "动态 PE", "PB"):
         if need not in labels:
@@ -85,6 +97,9 @@ def check(path: Path, rep: Report) -> None:
     else:
         if len(periods) < MIN_PERIODS:
             rep.err(f"financials.periods 只有 {len(periods)} 期，至少 {MIN_PERIODS} 期（覆盖近 2 年全部季报）")
+        elif len(periods) < 16:
+            rep.warn(f"financials.periods 只有 {len(periods)} 期，SKILL 要求 16 期"
+                     f"（单季倒挤 + 同季同比 + TTM 都要用）；若接口就这么多，报告里要说明")
         for row in qt:
             name = row.get("name", "?")
             vals = row.get("values") or []
@@ -170,19 +185,37 @@ def check(path: Path, rep: Report) -> None:
         if not st.get("state_text"):
             rep.warn(f"第 {st.get('no')} 步缺 state_text（MD 版七步表会靠兜底映射，HTML 版正常）")
     items = sc.get("items") or []
-    if len(items) != len([]) and len(items) != 16:
-        rep.warn(f"打分卡 {len(items)} 项，指标体系定义为 16 项")
+    if items and len(items) != 16:
+        rep.warn(f"打分卡 {len(items)} 项，指标体系定义为 16 项；"
+                 f"拿不到数据的项请保留并写 value: null（不可评），不要直接删行")
     wsum = 0.0
     total = 0.0
+    w_eval = 0.0
+    n_eval = 0
     for it in items:
         v, w = it.get("value"), it.get("weight")
+        if v is None:                      # 不可评：权重仍计入 33，但不进分母
+            if not _num(w):
+                rep.err(f"打分卡「{it.get('dim')}」缺 weight")
+            else:
+                wsum += float(w)
+            continue
         if not _num(v) or not _num(w):
-            rep.err(f"打分卡「{it.get('dim')}」value/weight 必须是数字")
+            rep.err(f"打分卡「{it.get('dim')}」value 必须是 -2/-1/0/+1/+2 或 null（不可评）")
             continue
         if v not in (-2, -1, 0, 1, 2):
             rep.err(f"打分卡「{it.get('dim')}」分值 {v} 只能是 -2/-1/0/+1/+2")
         wsum += float(w)
+        w_eval += float(w)
         total += float(v) * float(w)
+        n_eval += 1
+    if items:
+        if n_eval < 8:
+            rep.warn(f"可评项只有 {n_eval} 项（< 8），按 §13 应判「谨慎观望」并单列数据缺口")
+        if n_eval < len(items):
+            full = 2 * w_eval
+            rate = (total / full * 100) if full else 0
+            print(f"   · 可评 {n_eval} / {len(items)} 项，归一化得分率 {rate:.1f}%")
     if items and abs(wsum - WEIGHT_SUM) > 1e-6:
         (rep.err if len(items) == 16 else rep.warn)(
             f"打分卡权重合计 {wsum:g}，指标体系定义为 {WEIGHT_SUM}"
@@ -210,8 +243,11 @@ def check(path: Path, rep: Report) -> None:
         rep.warn("conclusion.triggers 为空（缺“判断修正的触发条件”）")
 
     # ---------- 数据缺口 ----------
-    if not data.get("data_gaps"):
+    gaps = data.get("data_gaps")
+    if not gaps:
         rep.warn("没有 data_gaps 清单——拿不到的指标应显式列出，而不是让区块消失")
+    elif not isinstance(gaps, list) or not all(isinstance(g, str) for g in gaps):
+        rep.err("data_gaps 必须是字符串数组（传字符串会被渲染成一串单字列表）")
     if not data.get("sources"):
         rep.err("sources 为空：每个数字都要有出处")
 

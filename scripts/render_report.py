@@ -158,6 +158,9 @@ td.rowhead{
 .bar-row{display:flex; align-items:center; gap:12px; margin-bottom:9px; font-size:13.5px}
 .bar-name{font-family:"Noto Sans CJK SC",sans-serif; min-width:104px; color:#3a4252}
 .bar-track{flex:1; height:9px; background:#eceae5; border-radius:5px; overflow:hidden}
+.bar-fill.na{background:repeating-linear-gradient(45deg,#ecebe7,#ecebe7 6px,#f7f5f1 6px,#f7f5f1 12px)}
+.bar-val.muted{font-size:11.5px;color:#8b93a1}
+.bar-row.na .bar-name{color:#8b93a1}
 .bar-fill{height:100%; border-radius:5px; background:linear-gradient(90deg,#9d2a2a,#c0392b)}
 .bar-fill.neg{background:linear-gradient(90deg,#14663a,#1e8449)}
 .bar-val{font-family:"DejaVu Sans Mono",monospace; min-width:56px; text-align:right; font-size:13px}
@@ -967,9 +970,18 @@ def sec_scorecard(sc: dict, title: str = "七步研判") -> str:
     items = sc.get("items") or []
     if items:
         out.append("<h3>加权评分</h3>")
-        max_abs = max((abs(float(i.get("value", 0))) for i in items), default=1) or 1
+        # value=None 表示该项不可评（数据缺口）：不计分、不进分母，条子画成灰底
+        scored = [i for i in items if i.get("value") is not None]
+        max_abs = max((abs(float(i["value"])) for i in scored), default=1) or 1
         for i in items:
-            val = float(i.get("value", 0))
+            if i.get("value") is None:
+                out.append(
+                    f'<div class="bar-row na"><div class="bar-name">{esc(i.get("dim"))}</div>'
+                    f'<div class="bar-track"><div class="bar-fill na" style="width:100%"></div></div>'
+                    f'<div class="bar-val muted">不可评 ×{esc(i.get("weight"))}</div></div>'
+                )
+                continue
+            val = float(i["value"])
             w = int(100 * abs(val) / max_abs)
             neg = "neg" if val < 0 else ""
             out.append(
@@ -977,6 +989,17 @@ def sec_scorecard(sc: dict, title: str = "七步研判") -> str:
                 f'<div class="bar-track"><div class="bar-fill {neg}" style="width:{w}%">'
                 f"</div></div>"
                 f'<div class="bar-val">{val:+.0f} ×{esc(i.get("weight"))}</div></div>'
+            )
+        if len(scored) < len(items):
+            w_all = sum(float(i.get("weight") or 0) for i in items)
+            w_ok = sum(float(i.get("weight") or 0) for i in scored)
+            pts = sum(float(i["value"]) * float(i.get("weight") or 0) for i in scored)
+            full = 2 * w_ok
+            rate = (pts / full * 100) if full else 0
+            out.append(
+                f'<p class="muted" style="margin-top:10px">可评 {len(scored)} / {len(items)} 项'
+                f'（权重 {w_ok:g} / {w_all:g}）；按可评项归一化：'
+                f'{pts:+.0f} / {full:g} = {rate:.1f}%</p>'
             )
         if sc.get("total") is not None:
             out.append(
@@ -1097,8 +1120,6 @@ def render(data: dict) -> str:
         sec_sources(data.get("sources") or []),
     ])
     date_line = ""
-    if m.get("price_at"):
-        pass  # 行情时点由下方 footer 拼接
     if m.get("report_date"):
         date_line = f'<footer>{esc(m["report_date"])} 生成　·　' \
                     f'本 报 告 基于公开数据整理，仅供参考，不构成投资建议</footer>'

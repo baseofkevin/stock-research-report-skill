@@ -32,6 +32,15 @@
         "id=99",
         "标注 +58"
       ]
+    },
+    {
+      "file": "cases/partial-nulls.json",
+      "desc": "3 项不可评：分母剔除 + 归一化得分率",
+      "expect_valid": true,
+      "must_contain": [
+        "不可评",
+        "可评 13 / 16 项"
+      ]
     }
   ]
 }

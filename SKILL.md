@@ -25,6 +25,8 @@ description: 输入股票代码或名称，从腾讯自选股（WeStock）调取
 - `给我出一份 中远海控 的企业信息解读报告`
 - `这只票怎么样？002519`
 
+**不支持港股、美股**。碰到 `00700`、`AAPL` 这类代码直接说明，不要用 A 股口径（扣非、合同负债、商誉）硬套。
+
 ---
 
 ## 前置条件
@@ -32,7 +34,9 @@ description: 输入股票代码或名称，从腾讯自选股（WeStock）调取
 **主要数据源：腾讯自选股（WeStock）Connector。**
 工具前缀 `data_*` / `tool_*`。若该 Connector 未连接，先按第五节「降级策略」处理。
 
-代码规范：沪 `sh600519`、深 `sz000001`、港 `hk00700`、美 `usAAPL`。
+**只做 A 股**（沪 / 深 / 北交所），不覆盖港股、美股。
+代码规范：沪 `sh600519`、深 `sz000001`、北交所 `bj830799`。
+用户给的是港股/美股代码（如 `00700`、`AAPL`）时，**直接说明本 skill 不支持，不要硬套 A 股口径**。
 用户只给名称或 6 位数字时，**必须先 `data_search` 拿到带前缀的代码**。
 
 ---
@@ -187,7 +191,7 @@ python3 $S/lint_encoding.py  报告.html 报告.md   # ② 产物乱码自检，
 | `financials` | **财务全景（合并块，见下表）** | 四、财务全景与跨年趋势研判 |
 | `data_gaps` | [] 字符串列表：拿不到的指标 + 它对哪个判断的影响 | 数据缺口与口径风险 |
 | `redflags` | [{**id**(1~25), level, text, evidence, hit}]，**只列命中项** | 五、排雷扫描（分母固定 25） |
-| `scorecard` | steps[{no,name,state(pass·warn·fail·na),**state_text**,conclusion}] / items[{dim,value,weight}] / total / total_note | 六、七步研判 + 评分条 |
+| `scorecard` | steps[{no,name,state(pass·warn·fail·na),**state_text**,conclusion}] / items[{dim,value,weight}] / total / total_note。**拿不到数据的项保留 16 行、写 `value: null`（不可评）**，渲染时画灰条、自动从分母剔除并算出归一化得分率 | 六、七步研判 + 评分条 |
 | `conclusion` | paragraphs[] / watchlist[] / triggers[] | 七、综合研判 + 跟踪清单 |
 | `sources` | [{name, detail}] | 数据来源 |
 | `charts_title` / `redflags_title` / `scorecard_title` / `conclusion_title` | 区块标题（含编号），缺省用「②/五/六/七」 | 各区块标题 |
@@ -223,7 +227,7 @@ python3 $S/lint_encoding.py  报告.html 报告.md   # ② 产物乱码自检，
 | 情形 | 处理 |
 |---|---|
 | WeStock Connector 未连接 | 先提示用户在「连接器管理」中连接**腾讯自选股**；征得同意后可用 WebSearch/WebFetch 拿公开财报数据补齐，**但报告里必须标注每个数字的来源与时效**；同时补齐 `data_gaps` |
-| 部分接口无数据（如港股缺现金流明细） | 该指标判定置「无数据」，在报告中注明原因，**不要用其他市场的口径硬套** |
+| 部分接口无数据（如北交所 / 次新股缺机构预期、缺历史估值序列） | 该指标判定置「无数据」，在报告中注明原因，**不要用其他市场的口径或同行数据硬套** |
 | **接口拿不到商誉 / 应付账款 / 其他应收 / 合同负债** | 这几项在打分卡里共占 5 项权重。**不要记 0 分**：把它们从分母剔除后按可评项归一化，并在 `data_gaps` 里写明「本项无法判定，结论不含该项」 |
 | 用户只要快速结论 | 跳过 HTML，直接在对话里给六段式的纯文字版 |
 | Python 不可用 | 按 `references/解读范式.md` 手写 HTML，视觉规范照抄 `scripts/render_report.py` 里的 CSS 常量 |
