@@ -1,5 +1,20 @@
 # 变更记录
 
+## v2.2.1 — 2026-10-28（接入过程可复用）
+
+把「怎么在终端里连上 WeStock」从一次性操作沉淀成文档 + 脚本。**不含任何本机凭据**，
+换电脑照做 + 重新授权一次即可。
+
+- 新增 `references/接入WeStock.md`：插件缓存位置、凭据信封结构（AES-256-GCM +
+  HKDF-SHA256，`info="workbuddy-oauth-credentials-v1"`，AAD=`userId|serverKey|fieldName`）、
+  MCP 协议细节（必须带 `Accept: text/event-stream`、`notifications/initialized` 返回空体、
+  结果是 SSE 的 `data:` 行、`content[].text` 里还是 JSON 要二次解析）、限频与排查表、
+  安全红线（token 不落盘、不拷贝 `.master.key`+凭据文件到别的机器）。
+- 新增 `scripts/westock_client.js`：Node ≥18 零依赖客户端，
+  `check` 看端点/有效期/连通性，`tools` 列真实工具，`call <tool> '<json>'` 取数。
+  返回非 JSON 时**直接报错退出**，避免把「服务限频」误当成「那天没有数据」。
+- `SKILL.md` 前置条件接上这两个文件；降级策略补 Node 不可用、凭据鉴权两行。
+
 ## v2.2.0 — 2026-10-28（接口实测后重写）
 
 拿到 WeStock MCP 的真实端点（`https://stockbuddy.qq.com/cgi/cgi-bin/openai/mcp/mcp`，

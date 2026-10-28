@@ -10,7 +10,7 @@ description: 输入股票代码或名称，从腾讯自选股（WeStock）调取
 
 把「股票代码」变成一篇**像人写的、有明确结论的**企业信息解读报告，输出为美化的 HTML。
 
-> 分析范式来自用户私人笔记（`/home/kevin/MyData/我github上的私人笔记/` 的 B 系列），
+> 分析范式来自用户的私人笔记（「公司财务解读」B 系列，路径随机器不同，以本地笔记为准），
 > 指标体系来自《企业财务分析指标体系手册》。
 > **三条铁律贯穿全程：现金流 > 利润；趋势 > 时点；结构 > 总量。**
 
@@ -32,7 +32,19 @@ description: 输入股票代码或名称，从腾讯自选股（WeStock）调取
 ## 前置条件
 
 **主要数据源：腾讯自选股（WeStock）Connector。**
-工具前缀 `data_*` / `tool_*`。若该 Connector 未连接，先按第五节「降级策略」处理。
+工具前缀 `data_*` / `tool_*`。
+
+**如果 `data_*` 工具没挂在当前环境里**（在终端 / 别的 agent 里跑），但本机 WorkBuddy
+已经连接过腾讯自选股，直接用 `scripts/westock_client.js` 取数：
+
+```bash
+node scripts/westock_client.js check        # 端点 / token 有效期 / 连通性
+node scripts/westock_client.js tools        # 真实工具清单
+node scripts/westock_client.js call data_finance '{"code":"sz301101","fields":"all","num":16}'
+```
+
+接入原理、凭据位置、协议细节、限频与排查表见 `references/接入WeStock.md`。
+**该文档只写过程，不含任何本机凭据**；换电脑重新在 WorkBuddy 里授权一次即可。
 
 **只做 A 股**（沪 / 深 / 北交所），不覆盖港股、美股。
 代码规范：沪 `sh600519`、深 `sz000001`、北交所 `bj830799`。
@@ -245,6 +257,8 @@ python3 $S/lint_encoding.py  报告.html 报告.md   # ② 产物乱码自检，
 | **接口拿不到商誉 / 应付账款 / 其他应收 / 合同负债** | 这几项在打分卡里共占 5 项权重。**不要记 0 分**：把它们从分母剔除后按可评项归一化，并在 `data_gaps` 里写明「本项无法判定，结论不含该项」 |
 | 用户只要快速结论 | 跳过 HTML，直接在对话里给六段式的纯文字版 |
 | Python 不可用 | 按 `references/解读范式.md` 手写 HTML，视觉规范照抄 `scripts/render_report.py` 里的 CSS 常量 |
+| Node 不可用（`westock_client.js` 跑不了） | 只用能挂上 `data_*` 工具的客户端跑；**不要自己拼 OAuth** |
+| 凭据/鉴权相关 | 见 `references/接入WeStock.md` 第七节排查表；**任何情况下都不把 token 写进报告、日志或 git** |
 
 ---
 
