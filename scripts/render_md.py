@@ -116,6 +116,12 @@ def b_price(p: dict) -> str:
         if len(vals) >= 2:
             seq = " → ".join(f"{l} {v:.2f}" for l, v in zip(lbs, vals))
             lo_i, hi_i = vals.index(min(vals)), vals.index(max(vals))
+            # 区间位置（0=最低，1=最高）与形态，按数据算，不写死
+            span = max(vals) - min(vals)
+            pos = (vals[-1] - min(vals)) / span if span else 0.5
+            where = "上沿" if pos >= 0.66 else ("下沿" if pos <= 0.33 else "中部")
+            chg_first = vals[-1] / vals[0] - 1 if vals[0] else 0
+            slope = "自起点震荡上行" if chg_first > 0.05 else ("自起点震荡下行" if chg_first < -0.05 else "在区间内横盘震荡")
             desc = (
                 f"**趋势图（折线面积图，季度收盘价，{t(p.get('unit','元'))}）**："
                 f"共 {len(vals)} 个季度，序列为 {seq}。"
@@ -123,8 +129,9 @@ def b_price(p: dict) -> str:
                 f"高点出现在 {lbs[hi_i]}（{max(vals):.2f}），"
                 f"最新一期 {lbs[-1]} 为 {vals[-1]:.2f}，"
                 f"较区间高点回撤 {(vals[-1] / max(vals) - 1) * 100:.1f}%，"
-                f"较区间低点高出 {(vals[-1] / min(vals) - 1) * 100:.1f}%。"
-                f"折线整体自高点震荡下行，最新一期位于区间下沿。"
+                f"较区间低点高出 {(vals[-1] / min(vals) - 1) * 100:.1f}%，"
+                f"位于区间 {pos * 100:.0f}% 分位（{where}）。"
+                f"折线{slope}，区间内幅度 {(chg_first) * 100:+.1f}%。"
             )
             out.append(f"*{t(p.get('chart_title') or '季度收盘走势')}*\n")
             out.append(desc + "\n")

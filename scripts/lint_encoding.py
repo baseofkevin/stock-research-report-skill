@@ -40,7 +40,9 @@ ALLOW = {
     "unit", "range", "rev_pct", "margin", "pct", "data_search", "data_quote",
     "data_kline", "data_profile", "data_finance", "data_notice", "data_news",
     "data_sector", "data_risk", "data_score", "data_rating", "data_report",
-    "data_dividend", "data_shareholder", "data_consensus", "sample", "report",
+    "data_dividend", "data_shareholder", "data_consensus", "data_disclosure",
+    "data_finsearch", "sample", "report",
+    "ocf_ttm", "np_ttm", "pe_ttm", "pe_lyr", "pe_fwd",
     "markdown", "core", "fields", "num", "query", "limit", "fq", "qfq",
     "connector", "schema", "version", "validate", "strict", "evals", "golden",
     "gross", "net", "op", "cagr", "ipo", "ai", "ar", "vr", "odm", "oem",
@@ -56,10 +58,20 @@ ALLOW = {
     "else", "periods", "stderr", "stdout", "pass", "warn", "fail", "lint",
     "cases", "expect", "validation", "label", "labels", "state_text",
     "data_gaps", "price_at", "schema_version", "v1", "v2", "html", "md",
+    # 通信/物联网硬件行业的通用技术名词与字段名（不是乱码）
+    "redcap", "gnss", "tops", "jetson", "thor", "tier", "tier1", "lpwa",
+    "fwa", "cpe", "aec", "sep", "sip", "iot", "cat", "bis",
+    "grossincomeratio", "shareholdernum", "interestbeardebt",
+    # 股东姓名拼音（外籍/英文名股东会以纯拼音出现）
+    "minhong", "mao",
+    # 日化/美妆行业的品牌与实体名（不是乱码）
+    "tommee", "tippee", "mayborn", "sephora", "asia", "jahwa",
+    # 接口字段名（出现在数据口径说明里）
+    "institutioncnt",
 }
 
 BAD_CN = re.compile(r"[一-鿿]{2,}")
-LATIN = re.compile(r"[A-Za-z]{2,}")
+LATIN = re.compile(r"[A-Za-z][A-Za-z_]*(?:_[A-Za-z]+)*")
 TAG = re.compile(r"<[^>]+>")
 
 
