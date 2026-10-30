@@ -266,6 +266,45 @@ def check_skeleton(docs: dict[str, str]) -> None:
         err(f"骨架节次不连续：{nums}")
 
 
+# --------------------------------- 9. 八节标题三方对账（骨架 / 范式 / 渲染器）
+def check_section_titles(docs: dict[str, str]) -> None:
+    """SKILL 骨架表、解读范式 §二 小节、渲染器默认标题，三处必须指同一节。
+
+    改名时最容易漏掉其中一处（v2.6.2 改「主要指标初步研判」就手动同步了 5 个文件）。
+    只比「去掉编号后的标题」；允许一方是另一方的前缀（如「财务全景」⊂「财务全景与跨年趋势」）。
+    """
+    skill = docs["SKILL.md"]
+    seg = skill.split("## 报告骨架")[-1].split("\n---\n")[0]
+    skel = {}
+    for r in _table_rows(seg):
+        if len(r) >= 2 and r[0] in "一二三四五六七八":
+            skel[r[0]] = r[1].strip()
+
+    fan = docs["references/解读范式.md"]
+    seg2 = fan.split("\n## 二、")[1].split("\n## ")[0]   # 注意：`### 二、` 里也含「## 二、」
+    fan_map = {}
+    for m in re.finditer(r"^### ([一二三四五六七八])、(.+)$", seg2, re.M):
+        fan_map[m.group(1)] = m.group(2).strip()
+
+    renderer = read("scripts/render_report.py")
+    hard = {}
+    for m in re.finditer(r'^\s*(?:sec_metrics|sec_price)\(\s*"([一二三四五六七八])、([^"]+)"', renderer, re.M):
+        hard[m.group(1)] = m.group(2).strip()
+    for m in re.finditer(r'^\s*title = v\.get\("title"\) or "([一二三四五六七八])、([^"]+)"', renderer, re.M):
+        hard[m.group(1)] = m.group(2).strip()
+
+    def same(a: str, b: str) -> bool:
+        return a == b or a.startswith(b) or b.startswith(a)
+
+    for num, title in skel.items():
+        if num in fan_map and not same(title, fan_map[num]):
+            err(f"第{num}节标题不一致：骨架写「{num}、{title}」，解读范式写「{num}、{fan_map[num]}」")
+        if num in hard and not same(title, hard[num]):
+            err(f"第{num}节标题不一致：骨架写「{num}、{title}」，渲染器默认写「{num}、{hard[num]}」")
+    if set(skel) - set(fan_map):
+        warn(f"解读范式 §二 缺这些节的小节标题：{sorted(set(skel) - set(fan_map))}")
+
+
 # ---------------------------------------------------------------- 快照处理
 def load_snapshot() -> dict:
     if SNAP.exists():
@@ -300,7 +339,7 @@ def refresh_snapshot() -> dict:
 
 
 MUTATIONS = [
-    ("SKILL.md", "version: 2.6.0", "version: 9.9.9", "版本号不一致"),
+    ("SKILL.md", "@VER@", "version: 9.9.9", "版本号不一致"),
     ("SKILL.md", "§13 打分卡", "§14 打分卡", "引用不存在的章节"),
     ("SKILL.md", "data_score", "data_scorez", "工具名写错"),
     ("SKILL.md", "`NotAccountsPayable`", "`NotAccountPayableZ`", "字段名拼错"),
@@ -308,6 +347,7 @@ MUTATIONS = [
     ("references/指标体系.md", "| 安全 | 商誉/净资产（反向） | ×2 |",
      "| 安全 | 商誉/净资产（反向） | ×4 |", "打分卡权重被改"),
     ("references/指标体系.md", "| 25 | 收入↓", "| 26 | 收入↓", "排雷条数不对"),
+    ("SKILL.md", "@SEC2@", "| 二 | 核心指标估值 |", "节标题与范式/渲染器不一致"),
 ]
 
 
@@ -321,9 +361,18 @@ def selftest() -> int:
         # 注意：skill 目录本身是软链接，cp -r 会复制链接；必须解引用
         shutil.copytree(SKILL, dst, symlinks=False,
                         ignore=shutil.ignore_patterns(".git", "__pycache__"))
+        # 占位符换成当前真值，版本号/标题以后改了自测也不会失效
+        ver = re.search(r"^version:\s*([\d.]+)", (dst / "SKILL.md").read_text(encoding="utf-8"), re.M)
+        sec2 = re.search(r"\| 二 \| ([^|]+?) \|",
+                         (dst / "SKILL.md").read_text(encoding="utf-8"))
+        subst = {"@VER@": f"version: {ver.group(1) if ver else '0.0.0'}",
+                 "@SEC2@": f"| 二 | {sec2.group(1).strip() if sec2 else '?'} |"}
+
         for rel, old, new, desc in MUTATIONS:
             f = dst / rel
             text = f.read_text(encoding="utf-8")
+            for k, v in subst.items():
+                old = old.replace(k, v)
             if old not in text:
                 print(f"[自测失败] 找不到注入点：{desc}（`{old}`）")
                 return 1
@@ -355,6 +404,7 @@ def main() -> int:
         ("数量常量", lambda: check_numbers(docs)),
         ("JSON 键可达", lambda: check_json_keys(docs)),
         ("报告骨架", lambda: check_skeleton(docs)),
+        ("节标题对账", lambda: check_section_titles(docs)),
     ]
     for name, fn in checks:
         before = len(issues)
