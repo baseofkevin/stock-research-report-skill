@@ -14,7 +14,7 @@
   <10 报错、<12 提醒「建议拉满 16 期」。
 - **三个指标补上数据源口径**：① 现金短债比——WeStock 没有短期借款明细，
   用 `InterestBearDebt` 保守替代并注明；② 商誉——没有 `Goodwill` 字段，
-  必须走 finsearch/年报/East Money，补不到就判不可评，**不许拿无形资产凑数**；
+  必须走 `data_finsearch` / 年报附注 / 东财 F10 补，补不到就判不可评，**不许拿无形资产凑数**；
   ③ 扣非——接口直接给 `NPDeductNonRecurringPL`，不用自己推。
 - **ROE 口径**：接口回传的 `ROE`/`ROIC`/`ROA` 只能做交叉验证，自己算要用 `SEWithoutMI`
   且注明期末/平均口径，两个数差超 1pct 要交代。
