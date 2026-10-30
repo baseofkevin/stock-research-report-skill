@@ -140,6 +140,68 @@ def b_price(p: dict) -> str:
     return "\n".join(out)
 
 
+MOAT_STRENGTH_MD = {"wide": "宽", "narrow": "窄", "none": "无"}
+MOAT_SRC_MD = {"strong": "强", "mid": "中", "weak": "弱", "none": "无"}
+
+
+def b_moat(m) -> str:
+    """三、生意本身 · 护城河（与 HTML 版同构，向后兼容纯字符串）。"""
+    if not isinstance(m, dict):
+        return "\n".join([f"### 护城河\n", t(m), ""])
+
+    out = ["### 护城河\n"]
+    label = MOAT_STRENGTH_MD.get(str(m.get("strength", "")))
+    if label:
+        note = t(m.get("strength_note", ""))
+        out += [f"**护城河 {t(m.get('strength_text') or label)}**　{note}".rstrip(), ""]
+    if m.get("text"):
+        out += [t(m["text"]), ""]
+
+    years = m.get("years") or []
+    mt = m.get("metrics") or {}
+    rows = mt.get("rows") or []
+    if years and rows:
+        out += ["#### ① 五个财务体征，拉长看\n"]
+        body = [[t(r.get("name"))] + [t(v) for v in (r.get("values") or [])] for r in rows]
+        out += [md_table(["指标"] + [t(y) for y in years], body, "l" + "c" * len(years)), ""]
+        judge = mt.get("judge") or {}
+        if judge:
+            for v in (judge.values() if isinstance(judge, dict) else judge):
+                out.append(f"- {t(v)}")
+            out.append("")
+    if mt.get("consistency"):
+        out += [f"*{t(mt['consistency'])}*", ""]
+
+    for idx, ch in enumerate(m.get("charts") or []):
+        out += [describe_chart({**ch, "labels": ch.get("labels") or years}), ""]
+
+    r = m.get("roic") or {}
+    if r:
+        out += ["#### ③ 进阶验证：ROIC 减 WACC\n"]
+        body = []
+        if r.get("value") is not None:
+            body.append(["ROIC 投入资本回报率", f"{t(r.get('value'))}%"])
+        if r.get("wacc") is not None:
+            body.append(["WACC 资金成本", f"{t(r.get('wacc'))}%"])
+        if r.get("spread") is not None:
+            body.append(["差值（ROIC − WACC）", f"{t(r.get('spread'))}pct"])
+        if body:
+            out += [md_table(["项", "值"], body, "lc"), ""]
+        if r.get("note"):
+            out += [f"*{t(r['note'])}*", ""]
+
+    src = m.get("sources") or []
+    if src:
+        out += ["#### ④ 护城河的来源（财务只是证据，这里才是答案）\n"]
+        body = [[t(it.get("type")), MOAT_SRC_MD.get(str(it.get("strength", "")), "—"),
+                 t(it.get("evidence"))] for it in src]
+        out += [md_table(["来源", "强度", "证据"], body, "lcl"), ""]
+
+    if m.get("verdict"):
+        out += ["> " + t(m["verdict"]), ""]
+    return "\n".join(out)
+
+
 def b_business(b: dict) -> str:
     if not b:
         return ""
@@ -151,7 +213,9 @@ def b_business(b: dict) -> str:
         rows = [[t(s.get("name")), t(s.get("rev_pct")), t(s.get("margin")),
                  t(s.get("comment"))] for s in segs]
         out += [md_table(["业务板块", "营收占比", "毛利率", "点评"], rows, "lccl"), ""]
-    for key, title in (("moat", "护城河"), ("policy", "行业与政策"),
+    if b.get("moat"):
+        out.append(b_moat(b["moat"]))
+    for key, title in (("policy", "行业与政策"),
                        ("upstream", "上游"), ("downstream", "下游")):
         if b.get(key):
             out += [f"### {title}\n", t(b[key]), ""]

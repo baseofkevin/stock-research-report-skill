@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -169,6 +170,16 @@ td.rowhead{
 .chart-box{border:1px solid var(--line); border-radius:6px; padding:14px; background:#fcfbfa}
 .chart-box svg{width:100%; height:auto; display:block}
 .chart-note{font-size:12.5px; color:var(--sub); margin-top:10px; line-height:1.7}
+.moat-head{display:flex; align-items:center; gap:9px; margin:6px 0 10px}
+.moat-sub{font-size:12.5px; color:var(--sub)}
+.moat-judge{margin:10px 0 4px}
+.moat-kpi{display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+  gap:10px; margin:12px 0 6px}
+.moat-kpi .box{border:1px solid var(--line); border-radius:6px; padding:11px 13px; background:#fcfbfa}
+.moat-kpi .k{font-size:12px; color:var(--sub); margin-bottom:5px}
+.moat-kpi .v{font-size:20px; font-weight:700; font-family:"DejaVu Sans Mono",monospace}
+.moat-kpi .v.pos{color:var(--ok)} .moat-kpi .v.neg{color:var(--risk)}
+.moat-kpi .v.mid{color:var(--mid)}
 
 /* ---------- 归纳卡 ---------- */
 .insights{display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
@@ -530,7 +541,7 @@ def sec_verdict(v: dict) -> str:
     out = [
         '<section class="verdict">',
         '<div class="vhead">',
-        f'<span class="stance {cls}">{esc(v.get("stance", "待判断"))}</span>',
+        f'<span class="stance {cls}">{_rich(v.get("stance", "待判断"))}</span>',
         f'<span class="muted">{esc(v.get("headline"))}</span>',
         "</div>",
         f"<p>{esc(v.get('summary'))}</p>",
@@ -581,6 +592,116 @@ def sec_price(data: dict) -> str:
     return "".join(out)
 
 
+MOAT_STRENGTH = {"wide": ("宽", "lv-ok"), "narrow": ("窄", "lv-mid"),
+                 "none": ("无", "lv-high")}
+MOAT_SRC = {"strong": ("强", "lv-ok"), "mid": ("中", "lv-mid"),
+            "weak": ("弱", "lv-na"), "none": ("无", "lv-na")}
+
+
+def _rich(txt) -> str:
+    """转义后用 **加粗** / `代码` 做轻量标记（护城河的长文本里到处是强调）。"""
+    out = esc(txt)
+    out = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", out)
+    out = re.sub(r"`([^`]+)`", r"<code>\1</code>", out)
+    return out
+
+
+def _moat_block(m) -> str:
+    """三、生意本身 · 护城河：五指标长周期 → ROIC/WACC → 来源论证。
+
+    m 为字符串时按旧版纯段落渲染（向后兼容）。
+    """
+    if not isinstance(m, dict):
+        return f"<h3>护城河</h3><p>{esc(m)}</p>"
+
+    out = ["<h3>护城河</h3>"]
+    label, cls = MOAT_STRENGTH.get(str(m.get("strength", "")), ("", ""))
+    if label:
+        note = _rich(m.get("strength_note", ""))
+        out.append(
+            f"<p class='moat-head'><span class='lv {cls}'>护城河 {esc(m.get('strength_text') or label)}</span>"
+            f"<span class='moat-sub'>{note}</span></p>"
+        )
+    if m.get("text"):
+        out.append(f"<p>{_rich(m['text'])}</p>")
+
+    # ① 五指标矩阵
+    years = m.get("years") or []
+    mt = m.get("metrics") or {}
+    rows = mt.get("rows") or []
+    if years and rows:
+        out.append("<h4>① 五个财务体征，拉长看</h4>")
+        out.append(_matrix_table(years, rows, first_col="指标", colorize=False))
+        judge = mt.get("judge") or {}
+        if judge:
+            out.append("<ul class='watch moat-judge'>")
+            for v in (judge.values() if isinstance(judge, dict) else judge):
+                out.append(f"<li>{_rich(v)}</li>")
+            out.append("</ul>")
+    if mt.get("consistency"):
+        out.append(f"<p class='chart-note'>{_rich(mt['consistency'])}</p>")
+
+    # ② 趋势图
+    charts = m.get("charts") or []
+    for idx, ch in enumerate(charts):
+        svg = svg_multi(ch.get("labels") or years, ch.get("series") or [],
+                        ch.get("unit_l", ""), ch.get("unit_r", ""),
+                        int(ch.get("height", 300)))
+        if not svg:
+            print(f"[warn] 护城河趋势图「{ch.get('title') or idx + 1}」没有可绘制数值，已跳过",
+                  file=sys.stderr)
+            continue
+        out.append(f"<h4>{esc(ch.get('title') or f'趋势图 {idx + 1}')}</h4>")
+        out.append(f"<div class='chart-box'>{svg}</div>")
+        if ch.get("note"):
+            out.append(f"<p class='chart-note'>{esc(ch['note'])}</p>")
+
+    # ③ ROIC vs WACC
+    r = m.get("roic") or {}
+    if r:
+        out.append("<h4>③ 进阶验证：ROIC 减 WACC</h4>")
+        cards = []
+        for key, name in (("value", "ROIC 投入资本回报率"), ("wacc", "WACC 资金成本")):
+            v = r.get(key)
+            if v is None:
+                continue
+            unit = "%" if key == "wacc" or r.get("unit", "%") == "%" else ""
+            cards.append(f"<div class='box'><div class='k'>{name}</div>"
+                         f"<div class='v'>{esc(v)}{unit}</div></div>")
+        sp = r.get("spread")
+        if sp is not None:
+            try:
+                positive = float(sp) > 0
+            except (TypeError, ValueError):
+                positive = None
+            cls_v = "pos" if positive else ("neg" if positive is False else "")
+            cards.append(f"<div class='box'><div class='k'>差值 ROIC − WACC</div>"
+                         f"<div class='v {cls_v}'>{esc(sp)}pct</div></div>")
+        if cards:
+            out.append(f"<div class='moat-kpi'>{''.join(cards)}</div>")
+        if r.get("note"):
+            out.append(f"<p class='chart-note'>{_rich(r['note'])}</p>")
+
+    # ④ 来源论证
+    src = m.get("sources") or []
+    if src:
+        out.append("<h4>④ 护城河的来源（财务只是证据，这里才是答案）</h4>")
+        out.append("<div class='tbl-scroll'><table><thead><tr><th>来源</th><th>强度</th>"
+                   "<th>证据</th></tr></thead><tbody>")
+        for it in src:
+            label, cls = MOAT_SRC.get(str(it.get("strength", "")), ("", "lv-na"))
+            out.append(
+                f"<tr><td class='rowhead'>{esc(it.get('type'))}</td>"
+                f"<td class='center'><span class='lv {cls}'>{esc(label)}</span></td>"
+                f"<td>{_rich(it.get('evidence'))}</td></tr>"
+            )
+        out.append("</tbody></table></div>")
+
+    if m.get("verdict"):
+        out.append(f"<blockquote>{_rich(m['verdict'])}</blockquote>")
+    return "".join(out)
+
+
 def sec_business(b: dict) -> str:
     if not b:
         return ""
@@ -601,7 +722,9 @@ def sec_business(b: dict) -> str:
                 f"<td>{esc(s.get('comment'))}</td></tr>"
             )
         out.append("</tbody></table></div>")
-    for key, title in (("moat", "护城河"), ("policy", "行业与政策"),
+    if b.get("moat"):
+        out.append(_moat_block(b["moat"]))
+    for key, title in (("policy", "行业与政策"),
                        ("upstream", "上游"), ("downstream", "下游")):
         if b.get(key):
             out.append(f"<h3>{title}</h3><p>{esc(b[key])}</p>")
@@ -1015,7 +1138,7 @@ def sec_conclusion(c: dict, title: str = "综合研判") -> str:
         return ""
     out = [f"<section class='concl'><h2>{esc(title)}</h2>"]
     for p in c.get("paragraphs") or []:
-        out.append(f"<p>{esc(p)}</p>")
+        out.append(f"<p>{_rich(p)}</p>")
     if c.get("watchlist"):
         out.append("<h3>后续跟踪清单</h3><ol class='watch'>")
         for w in c["watchlist"]:

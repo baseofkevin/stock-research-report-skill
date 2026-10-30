@@ -68,6 +68,8 @@ ALLOW = {
     "tommee", "tippee", "mayborn", "sephora", "asia", "jahwa",
     # 接口字段名（出现在数据口径说明里）
     "institutioncnt",
+    # 大宗商品行情数据源与其他合法外文专名
+    "mysteel", "ifind", "cbc", "v2o5", "tio2", "feiti",
 }
 
 BAD_CN = re.compile(r"[一-鿿]{2,}")
@@ -137,6 +139,9 @@ def suspicious(path: Path):
         if BAD_CN.search(probe):
             for m in LATIN.finditer(probe):
                 w = m.group()
+                # 全大写 + 下划线的接口名/枚举（RPT_F10_FINANCE_G）不是乱码，跳过
+                if w.isupper() and len(w) >= 3:
+                    continue
                 if len(w) >= 4 and w.lower() not in ALLOW:
                     issues.append((i, f"可疑拉丁串 {w!r}", line.strip()[:60]))
         # 2. 占位符没填完

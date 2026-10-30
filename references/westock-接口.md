@@ -200,7 +200,40 @@ EndDate  InfoPublDate  date  _date
 
 ---
 
-## 八、一句话速查
+## 八、FCF 的「资本支出」必须外补（WeStock 的唯一致命缺口）
+
+护城河五指标里 **FCF = 经营现金流 − 资本支出**，而 WeStock 的现金流量表只有 22 个字段，
+**没有「购建固定资产、无形资产和其他长期资产支付的现金」**。三个替代品全部不能用：
+
+| 候选 | 实测（上海家化 600315） | 结论 |
+|---|---|---|
+| `FCFE` / `FCFF` 字段 | 2024 年 OCF +2.73 亿、资本支出 0.96 亿 → 真 FCF 1.77 亿，而接口 `FCFE` = **−14.19 亿**、`FCFF` = −12.04 亿 | 口径不明（含债务/权益变动），**差 16 亿，不能用** |
+| `NetInvestCashFlow`（投资活动净额） | 2025 年 8.01 − 5.38 = 2.63 亿，真 FCF 7.25 亿 | 把买理财当成投资，**严重低估** |
+| 用资产负债表倒推 | Δ(固定资产+在建+无形) + 折旧摊销 | WeStock **没有折旧摊销字段**，倒不出来 |
+
+**唯一可行做法**：WeStock 取其余全部数据，资本支出单独从东财 F10 补一个字段：
+
+```
+https://datacenter.eastmoney.com/securities/api/data/v1/get
+  ?reportName=RPT_F10_FINANCE_GCASHFLOW
+  &columns=SECUCODE,REPORT_DATE,CONSTRUCT_LONG_ASSET
+  &filter=(SECUCODE%3D%22600315.SH%22)&pageSize=60
+  &sortColumns=REPORT_DATE&sortTypes=-1&source=HSF10&client=PC
+```
+
+`CONSTRUCT_LONG_ASSET` = 购建固定资产、无形资产和其他长期资产支付的现金（元）。
+年报到年报、季报对季报，`REPORT_DATE` 取 `12-31` 即得年度资本支出。
+
+**报告里必须注明**：FCF 的资本支出来自东财 F10，其余数据来自腾讯自选股——
+两个源的口径差异（例如资本开支是否含税、是否含在建工程）要一句话交代。
+
+> 这一条是护城河模块唯一的跨源依赖。除它之外，五指标里的净利率、ROE、ROA，
+> 以及 ROIC 需要的 EBIT / 有息负债 / 货币资金 / 交易性金融资产，**WeStock 的
+> `fields="all"` 全部覆盖**，不需要第二个源。
+
+---
+
+## 九、一句话速查
 
 ```
 data_search     → 代码

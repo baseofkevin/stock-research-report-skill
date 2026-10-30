@@ -42,6 +42,94 @@ def _num(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+MOAT_STRENGTHS = {"wide", "narrow", "none"}
+MOAT_SRC_STRENGTHS = {"strong", "mid", "weak", "none"}
+MOAT_CORE_ROWS = {"fcf", "net_margin", "roe"}
+MOAT_OPT_ROWS = {"fcf_margin", "roa"}
+
+
+def _check_moat(data: dict, rep: Report) -> None:
+    """护城河块：五指标矩阵 + 趋势图 + ROIC/WACC + 来源论证。"""
+    b = data.get("business") or {}
+    m = b.get("moat")
+    if not m:
+        rep.warn("business.moat 缺失：三、生意本身 会没有护城河一节")
+        return
+    if not isinstance(m, dict):
+        rep.warn("business.moat 是纯字符串（旧格式）：缺五指标表、趋势图和 ROIC/WACC，"
+                 "按新规范应改成对象")
+        return
+
+    if str(m.get("strength", "")) not in MOAT_STRENGTHS:
+        rep.err(f"business.moat.strength={m.get('strength')!r}，只能是 wide / narrow / none")
+
+    years = m.get("years") or []
+    mt = m.get("metrics") or {}
+    rows = mt.get("rows") or []
+    if not years:
+        rep.err("business.moat.years 为空：五指标必须按年铺开")
+    elif len(years) < 5:
+        rep.warn(f"business.moat.years 只有 {len(years)} 年，判断护城河至少要 5 年")
+    if not rows:
+        rep.err("business.moat.metrics.rows 为空：缺少 FCF / 净利率 / ROE 等指标行")
+
+    keys = {str(r.get("key")) for r in rows}
+    missing = MOAT_CORE_ROWS - keys
+    if missing:
+        rep.err(f"business.moat.metrics.rows 缺少核心指标 {sorted(missing)}（FCF / 净利率 / ROE 必填）")
+    lack_opt = MOAT_OPT_ROWS - keys
+    if lack_opt:
+        rep.warn(f"business.moat.metrics.rows 缺 {sorted(lack_opt)}（建议补齐五个指标）")
+
+    for r in rows:
+        vals = r.get("values") or []
+        if years and len(vals) != len(years):
+            rep.err(f"护城河指标「{r.get('name')}」有 {len(vals)} 个值，但 years 有 {len(years)} 个")
+        bad = [v for v in vals if v not in (None, "-", "—") and not _num(v)]
+        if bad:
+            rep.err(f"护城河指标「{r.get('name')}」含非数字 {bad[:3]}；"
+                    f"表格渲染不出来（要写纯数字，单位放 name 或 unit）")
+
+    charts = m.get("charts") or []
+    if not charts:
+        rep.warn("business.moat.charts 为空：按新规范护城河要配趋势图")
+    for ci, ch in enumerate(charts, 1):
+        ctitle = ch.get("title") or f"护城河图 {ci}"
+        lv = ch.get("labels") or years
+        for srow in (ch.get("series") or []):
+            sv = srow.get("values") or []
+            if len(sv) != len(lv):
+                rep.err(f"「{ctitle}」序列「{srow.get('name')}」{len(sv)} 个值 ≠ labels {len(lv)} 个")
+            bad = [v for v in sv if not _num(v)]
+            if bad:
+                rep.err(f"「{ctitle}」序列「{srow.get('name')}」含非数字 {bad[:3]}，图会整块消失")
+
+    ro = m.get("roic") or {}
+    if not ro:
+        rep.warn("business.moat.roic 缺失：缺 ROIC vs WACC 这一步")
+    else:
+        v, w = ro.get("value"), ro.get("wacc")
+        if not _num(v) or not _num(w):
+            rep.err(f"business.moat.roic 的 value/wacc 必须是数字（当前 {v!r} / {w!r}）")
+        elif ro.get("spread") is not None and _num(ro.get("spread")):
+            gap = abs(float(ro["spread"]) - (float(v) - float(w)))
+            if gap > 0.5:
+                rep.err(f"roic.spread={ro.get('spread')} 与 value-wacc={float(v) - float(w):.1f} 对不上")
+
+    src = m.get("sources") or []
+    if not src:
+        rep.warn("business.moat.sources 为空：须回答“凭什么把对手挡在门外”")
+    for it in src:
+        if str(it.get("strength", "")) not in MOAT_SRC_STRENGTHS:
+            rep.err(f"护城河来源「{it.get('type')}」strength={it.get('strength')!r}，"
+                    f"只能是 strong / mid / weak / none")
+        if not it.get("evidence"):
+            rep.err(f"护城河来源「{it.get('type')}」没有 evidence：不能只有结论没有证据")
+
+    if not m.get("verdict"):
+        rep.warn("business.moat.verdict 为空：护城河要有明确结论")
+
+
 def check(path: Path, rep: Report) -> None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -132,6 +220,8 @@ def check(path: Path, rep: Report) -> None:
                             f"带 % / 亿 / 括号 的字符串画不出来，图会整块消失")
                 if srow.get("type") not in ("bar", "line", None):
                     rep.err(f"图「{ctitle}」序列「{sname}」type 只能是 bar/line")
+
+        _check_moat(data, rep)
 
         lat = f.get("latest") or {}
         if f and not lat.get("items"):

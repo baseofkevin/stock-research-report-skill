@@ -132,7 +132,15 @@ data_score        → 诊股评分（只作交叉参考，不替代自己的判�
   **营运资本占用（应收 + 存货 − 应付）与产业链地位**、在建工程趋势、商誉占净资产比、
   **其他应收款占总资产比**
 - **§8 安全**：资产负债率（**剔合同负债**）、有息负债及其趋势、**毛利额 ÷ 利息费用**
-- **§9 护城河**：ROE/ROIC/毛利率/净现比各拉 **5 年序列**，看水平、稳定性、有无趋势性下移
+- **§9 护城河**：① 五指标按年铺开（**FCF、FCF/营收、净利率、ROE、ROA**，≥5 年）；
+  ② 两张趋势图（FCF 柱 + FCF/营收 线；净利率/ROE/ROA 三线）；
+  ③ **ROIC 减 WACC**（贴出 Rf / ERP / β 假设，看差值正负与是否收窄）；
+  ④ 来源五类（无形资产/转换成本/网络效应/成本优势/有效规模）逐条给证据，
+  **一条都占不到就写「无护城河」**，不要拿管理层优秀或行业景气凑数。
+  ※ FCF 的资本支出用「购建固定资产、无形资产和其他长期资产支付的现金」，
+  不能用投资活动现金流净额（后者含买理财，会算出巨额负数），**更不能用接口的 FCFE/FCFF**
+  （口径不明，上海家化 2024 年差 16 亿）；WeStock 现金流量表没有这个科目，
+  从东财 F10 `RPT_F10_FINANCE_GCASHFLOW.CONSTRUCT_LONG_ASSET` 补，并注明跨源。
 - **§3 估值**：静态/滚动/动态 PE 三者及**梯度解读**、PB、**经营性 PB**（剔理财与商誉）、
   PEG、股息率、PE/PB 历史分位
 
@@ -214,6 +222,7 @@ python3 $S/lint_encoding.py  报告.html 报告.md   # ② 产物乱码自检，
 | `price` | records[]（历史区间）/ chart_data[{label,value}] / comment | 一、股价位置 + SVG 走势图 |
 | `core_metrics` | [{label, value, note, flag(ok·warn·bad)}]，建议 ≥10 项 | 二、核心指标与估值 |
 | `business` | intro / segments[{name,rev_pct,margin,comment}] / moat / policy / upstream / downstream | 三、生意本身 |
+| `business.moat` | **对象**：text / strength(wide·narrow·none) / strength_text / strength_note / years[] / metrics{rows[{key,name,unit,values[]}], judge, consistency} / charts[{title,labels?,unit_l,unit_r,series}] / roic{value,wacc,spread,note} / sources[{type,strength(strong·mid·weak·none),evidence}] / verdict。**纯字符串仍然兼容，但会告警**（缺表、缺图、缺 ROIC/WACC）。rows 的 key 必须是 fcf / fcf_margin / net_margin / roe / roa 五个 | 护城河：五指标表 + 两张趋势图 + ROIC/WACC + 来源表 |
 | `financials` | **财务全景（合并块，见下表）** | 四、财务全景与跨年趋势研判 |
 | `data_gaps` | [] 字符串列表：拿不到的指标 + 它对哪个判断的影响 | 数据缺口与口径风险 |
 | `redflags` | [{**id**(1~25), level, text, evidence, hit}]，**只列命中项** | 五、排雷扫描（分母固定 25） |

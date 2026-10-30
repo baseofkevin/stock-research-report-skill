@@ -1,5 +1,30 @@
 # 变更记录
 
+## v2.3.0 — 2026-10-30（护城河模块：五指标 + 趋势图 + ROIC/WACC）
+
+按「先用财务数据验证有没有护城河，再回答护城河从哪来」的思路重做 `business.moat`。
+
+- `business.moat` 从**一段文字**升级为**对象**：`text` / `strength` / `years` /
+  `metrics.rows`（fcf、fcf_margin、net_margin、roe、roa 五个 key）/ `charts` /
+  `roic{value,wacc,spread,note}` / `sources[{type,strength,evidence}]` / `verdict`。
+  **旧的纯字符串仍然兼容**，但 validate 会告警缺表缺图。
+- HTML 渲染：五指标矩阵表（指标 × 年份）+ 两张趋势图（FCF 柱 + FCF/营收 线；
+  净利率/ROE/ROA 三线）+ ROIC/WACC 三张卡片（差值正绿负红）+ 来源表（强/中/弱/无）
+  + 结论引用块。MD 版同构（表格 + 图的文字读法）。
+- 支持轻量标记：`**加粗**` 与 `` `代码` `` 在护城河里会渲染成 `<strong>`/`<code>`，
+  不再是裸露的星号；结论段与立场标签一并修好。
+- `references/指标体系.md §9` 扩写：五个指标的公式与口径陷阱、阈值分档、
+  一致性规则（5 年里 ≥4 年达标）、ROIC 剔除超额现金的理由、护城河五类来源的判断线索。
+- `references/解读范式.md`：护城河一节的四步写法 + 句式模板 + 收尾反问
+  「对手拿 10 个亿进场能不能抢走这门生意」。
+- `references/westock-接口.md §八`：**FCF 的资本支出必须外补**。WeStock 现金流量表没有
+  这个科目，`FCFE`/`FCFF` 口径不明（上海家化 2024 年 OCF 2.73、真 FCF 1.77，
+  接口给 −14.19），`NetInvestCashFlow` 把买理财当投资（2025 年低估 4.6 亿），
+  资产负债表倒推又缺折旧摊销字段。改用东财 F10 `CONSTRUCT_LONG_ASSET` 补一个字段，
+  并在报告里注明跨源。
+- `scripts/lint_encoding.py`：全大写 + 下划线的接口名（`RPT_F10_FINANCE_G`）不再误报为乱码。
+- 样板：上海家化（600315）2019—2025 七年数据重算并重渲染，validate 0 错 0 警。
+
 ## v2.2.1 — 2026-10-28（接入过程可复用）
 
 把「怎么在终端里连上 WeStock」从一次性操作沉淀成文档 + 脚本。**不含任何本机凭据**，
