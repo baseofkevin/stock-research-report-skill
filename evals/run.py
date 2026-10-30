@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -71,6 +72,17 @@ def main() -> int:
             if case.get("expect_stance"):
                 if case["expect_stance"] not in body_html:
                     problems.append(f"HTML 未渲染出 stance {case['expect_stance']!r}")
+            # 节编号必须从「一」开始连续，不能跳号/重号
+            seq = re.findall(r"<h2>([一二三四五六七八九十])、", body_html)
+            expected = list("一二三四五六七八九十")[:len(seq)]
+            if seq != expected:
+                problems.append(f"HTML 节编号不连续：{''.join(seq)}（应为 {''.join(expected)}）")
+            # 编码/乱码检查也要进 CI；golden sample 不能自己过不了 lint
+            if html.exists() and md.exists():
+                rcl, ol, el = run([sys.executable, str(SCRIPTS / "lint_encoding.py"),
+                                   str(html), str(md)])
+                if rcl != 0:
+                    problems.append(f"lint_encoding 未通过：{(ol + el).strip()[-300:]}")
             if verbose:
                 if e1.strip() or e2.strip():
                     print(f"  · {name} 渲染告警：{(e1 + e2).strip()[:300]}")

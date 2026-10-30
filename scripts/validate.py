@@ -23,7 +23,21 @@ STATES = {"pass", "fail", "warn", "na"}
 REDFLAG_TOTAL = 25
 WEIGHT_SUM = 33          # 16 项打分卡权重合计（每项满分 +2 → 满分 66）
 EXPECTED_STEPS = 7
+EXPECTED_ITEMS = 16
 MIN_PERIODS = 10
+MIN_CORE_METRICS = 10
+
+# v2 八节骨架：缺任何一节都不允许静默出报告。
+REQUIRED_V2 = {
+    "price": "一、股价位置",
+    "core_metrics": "二、主要指标初步研判",
+    "business": "三、生意本身",
+    "financials": "四、财务全景与跨年趋势研判",
+    "redflags_checked": "五、排雷扫描（零命中也要有 25 条已过标记）",
+    "scorecard": "六、七步研判与打分卡",
+    "valuation": "七、企业估值",
+    "conclusion": "八、综合研判与跟踪清单",
+}
 
 
 class Report:
@@ -67,14 +81,19 @@ def _check_valuation(data: dict, rep: Report) -> None:
             rep.err(f"估值指标「{name}」current={cur!r} 必须是正数")
             continue
         good = []          # 兼容 [{d,v}] 与 [v] 两种写法
+        last = None
         for item in series:
             val = item.get("v") if isinstance(item, dict) else item
             if _num(val) and float(val) > 0:
                 good.append(float(val))
+                last = float(val)
         if len(good) < 20:
             rep.warn(f"估值指标「{name}」只有 {len(good)} 个历史样本（建议 ≥20，否则分位不可信）")
         if not good:
             continue
+        if last is not None and abs(float(cur) - last) / last > 0.05:
+            rep.err(f"估值指标「{name}」current={cur} 与 series 最后一点 {last:g} 相差 "
+                    f"{abs(float(cur) - last) / last * 100:.1f}%——当前值必须对齐曲线末端")
         calc = 100 * sum(1 for x in good if x < float(cur)) / len(good)
         declared = m.get("percentile")
         if declared is not None and _num(declared):
@@ -189,7 +208,8 @@ def check(path: Path, rep: Report) -> None:
         return
 
     # ---------- schema / meta ----------
-    if str(data.get("schema_version")) != "2":
+    is_v2 = str(data.get("schema_version")) == "2"
+    if not is_v2:
         msg = (f"schema_version 不是 \"2\"（当前 {data.get('schema_version')!r}）")
         if data.get("financials"):
             rep.err(msg + "：有 financials 却缺版本号，说明字段结构可能已漂移")
@@ -208,10 +228,32 @@ def check(path: Path, rep: Report) -> None:
     elif m.get("chg_note") and m["price_at"] not in str(m["chg_note"]):
         rep.warn("meta.price_at 与 meta.chg_note 不一致（两处都写了时点，容易自相矛盾）")
 
+    if is_v2:
+        for key, label in REQUIRED_V2.items():
+            if data.get(key) in (None, "", [], {}):
+                rep.err(f"v2 缺少必需区块「{key}」：{label} 整节不会出现")
+
+    # ---------- 结论卡 ----------
+    vv = data.get("verdict") or {}
+    if not str(vv.get("stance") or "").strip():
+        rep.err("verdict.stance 为空：报告没有明确结论，不能只靠分数")
+    if is_v2 and not str(data.get("core_summary") or "").strip():
+        rep.err("core_summary 为空：二、主要指标初步研判 必须以一句初步判断收尾")
+    elif data.get("core_summary") and len(str(data.get("core_summary")).strip()) < 8:
+        rep.err("core_summary 太短：至少写出一句可读的初步判断")
+
+    # ---------- 股价图数值 ----------
+    for c in (data.get("price") or {}).get("chart_data") or []:
+        if c.get("value") is not None and not _num(c.get("value")):
+            rep.err(f"price.chart_data 的 value={c.get('value')!r} 不是数字；"
+                    f"渲染器会 float() 崩溃（写成 12.5，不要写 12.5元）")
+
     # ---------- 估值口径自查 ----------
     cm = data.get("core_metrics") or []
-    if len(cm) < 8:
-        rep.warn(f"core_metrics 只有 {len(cm)} 项，建议 ≥10（含静态/滚动/动态 PE、PB、经营性 PB、股息率、ROE/ROA/ROIC）")
+    if len(cm) < MIN_CORE_METRICS:
+        (rep.err if is_v2 else rep.warn)(
+            f"core_metrics 只有 {len(cm)} 项，至少 {MIN_CORE_METRICS} 项"
+            f"（含静态/滚动/动态 PE、PB、经营性 PB、股息率、ROE/ROA/ROIC）")
     for it in cm:
         if it.get("flag") not in (None, "", "ok", "warn", "bad"):
             rep.err(f"core_metrics「{it.get('label')}」flag={it.get('flag')!r}，"
@@ -270,9 +312,6 @@ def check(path: Path, rep: Report) -> None:
                 if srow.get("type") not in ("bar", "line", None):
                     rep.err(f"图「{ctitle}」序列「{sname}」type 只能是 bar/line")
 
-        _check_moat(data, rep)
-        _check_valuation(data, rep)
-
         lat = f.get("latest") or {}
         if f and not lat.get("items"):
             rep.warn("financials.latest.items 为空")
@@ -287,10 +326,16 @@ def check(path: Path, rep: Report) -> None:
             if not r.get("threshold"):
                 rep.warn(f"安全判定「{r.get('name')}」缺 threshold（阈值与说明）")
 
+    # 护城河与估值不依赖 financials：v2 即使没有财务块也要检查，不能跳过。
+    _check_moat(data, rep)
+    _check_valuation(data, rep)
+
     # ---------- 排雷 ----------
     rf = data.get("redflags") or []
-    if not rf:
-        rep.warn("没有 redflags 区块（按规矩要逐条过 25 条，至少留下命中项）")
+    if is_v2 and data.get("redflags_checked") != REDFLAG_TOTAL:
+        rep.err(f"v2 必须给 redflags_checked={REDFLAG_TOTAL}（零命中也要声明 25 条逐条过）")
+    if not rf and data.get("redflags_checked") != REDFLAG_TOTAL:
+        rep.warn("没有命中项，且未声明 redflags_checked=25：无法证明 25 条逐条过")
     ids: list[int] = []
     for r in rf:
         if r.get("hit"):
@@ -325,8 +370,11 @@ def check(path: Path, rep: Report) -> None:
         if not st.get("state_text"):
             rep.warn(f"第 {st.get('no')} 步缺 state_text（MD 版七步表会靠兜底映射，HTML 版正常）")
     items = sc.get("items") or []
-    if items and len(items) != 16:
-        rep.warn(f"打分卡 {len(items)} 项，指标体系定义为 16 项；"
+    if is_v2 and len(items) != EXPECTED_ITEMS:
+        rep.err(f"打分卡 {len(items)} 项，指标体系定义为 {EXPECTED_ITEMS} 项；"
+                f"拿不到数据的项请保留并写 value: null（不可评），不要直接删行")
+    elif items and len(items) != EXPECTED_ITEMS:
+        rep.warn(f"打分卡 {len(items)} 项，指标体系定义为 {EXPECTED_ITEMS} 项；"
                  f"拿不到数据的项请保留并写 value: null（不可评），不要直接删行")
     wsum = 0.0
     total = 0.0
@@ -361,18 +409,32 @@ def check(path: Path, rep: Report) -> None:
             f"打分卡权重合计 {wsum:g}，指标体系定义为 {WEIGHT_SUM}"
             + ("" if len(items) == 16 else f"（当前只有 {len(items)} 项，故仅告警）"))
     declared = sc.get("total")
-    if declared and items:
-        try:
-            dv = int(str(declared).strip().lstrip("+").split("/")[0].strip())
-        except (TypeError, ValueError):
-            rep.warn(f"scorecard.total 格式无法解析：{declared!r}")
+    if declared and items and is_v2:
+        text = str(declared).strip()
+        m_total = re.match(r"^([+\-]?\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)", text)
+        if not m_total:
+            rep.err(f"scorecard.total 格式无法解析：{declared!r}（应形如 47 / 66（得分率 71.2%））")
         else:
+            dv, dmax = float(m_total.group(1)), float(m_total.group(2))
+            full = 2 * w_eval
             if abs(dv - total) > 0.5:
-                rep.err(f"scorecard.total 标注 {dv:+d}，但按 items 实算 {total:+.0f}（对不上）")
+                rep.err(f"scorecard.total 标注 {dv:+.0f}，但按 items 实算 {total:+.0f}（对不上）")
+            if abs(dmax - full) > 0.5:
+                rep.err(f"scorecard.total 分母 {dmax:g}，但可评项满分应为 {full:g}（对不上）")
+            m_rate = re.search(r"(\d+(?:\.\d+)?)\s*%", text)
+            if m_rate and full:
+                calc_rate = total / full * 100
+                if abs(float(m_rate.group(1)) - calc_rate) > 0.2:
+                    rep.err(f"scorecard.total 得分率 {m_rate.group(1)}%，但实算 "
+                            f"{calc_rate:.1f}%（括号里的百分比与分数对不上）")
+            elif full:
+                rep.warn("scorecard.total 建议在括号里写得分率，便于人工核对")
 
     # ---------- 结论与跟踪 ----------
     c = data.get("conclusion") or {}
-    if len(c.get("paragraphs") or []) < 3:
+    if is_v2 and len(c.get("paragraphs") or []) < 3:
+        rep.err("conclusion.paragraphs 少于 3 段：八、综合研判必须有完整论证")
+    elif len(c.get("paragraphs") or []) < 3:
         rep.warn("conclusion.paragraphs 少于 3 段")
     if len(c.get("watchlist") or []) < 3:
         rep.warn("conclusion.watchlist 少于 3 条")
@@ -390,6 +452,8 @@ def check(path: Path, rep: Report) -> None:
         rep.err("data_gaps 必须是字符串数组（传字符串会被渲染成一串单字列表）")
     if not data.get("sources"):
         rep.err("sources 为空：每个数字都要有出处")
+    elif not isinstance(data["sources"], list):
+        rep.err("sources 必须是数组（传字符串会被渲染成逐字列表）")
 
 
 def main() -> int:

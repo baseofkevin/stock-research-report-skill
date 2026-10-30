@@ -10,7 +10,7 @@
     python3 scripts/check_docs.py            # 用 scripts/snapshots/westock.json 快照
     python3 scripts/check_docs.py --refresh  # 重新抓工具/字段快照（需要能连 WeStock）
     python3 scripts/check_docs.py -v         # 打印每条检查项
-    python3 scripts/check_docs.py --selftest # 变异测试：故意写错 7 处，确认都抓得到
+    python3 scripts/check_docs.py --selftest # 变异测试：故意写错 8 处，确认都抓得到
 
 退出码: 0 = 无错误（警告不算失败），1 = 有错误。
 """
@@ -27,6 +27,9 @@ SNAP = SKILL / "scripts" / "snapshots" / "westock.json"
 DOCS = ["SKILL.md", "CHANGELOG.md",
         "references/指标体系.md", "references/解读范式.md",
         "references/westock-接口.md", "references/接入WeStock.md"]
+
+sys.path.insert(0, str(SKILL / "scripts"))
+from render_report import SECTION_TITLES  # noqa: E402
 
 # 文档里合法出现、但不是接口工具的串（JSON 键、我们自己的字段名）
 NOT_A_TOOL = {
@@ -125,7 +128,11 @@ FIELD_ALLOW = {
     "WorkBuddy", "WeStock", "DeepSeek", "EastMoney", "Mcp", "Report",
     "OAuth", "Bearer", "SHA256", "AES", "GCM", "HKDF",
     "AttributeError", "TypeError", "KeyError", "JSONDecodeError",
+    "Goodwill",  # 文档里专门用来提醒「不是这个拼写」的反例
 }
+
+# 这些字段确实可能不在接口里；只有在「不存在/不返回」语境里才放行。
+ABSENT_OK = {"ShortTermLoan", "InventoryBreakdown", "Top5Customer"}
 
 
 def check_fields(docs: dict[str, str], snap: dict) -> None:
@@ -136,21 +143,32 @@ def check_fields(docs: dict[str, str], snap: dict) -> None:
         warn("快照里没有字段清单，跳过字段名核对（跑 --refresh 重建）")
         return
     # 只查反引号里的驼峰标识符：`InfoPublDate` 这种，避免把普通英文当字段
-    NEG = ("不存在", "拿不到", "没有", "缺失", "缺该", "无此", "取不到", "不返回")
+    NEG = r"(?:不存在|拿不到|没有|缺失|缺该|无此|取不到|不返回)"
+    def said_absent(token: str, start: int, text: str) -> bool:
+        """只在字段名附近的「字段 + 不存在」句式里判，不用 120 字宽窗误伤。"""
+        seg = text[max(0, start - 40):start + len(token) + 40]
+        pats = (
+            rf"`{re.escape(token)}`\s*{NEG}",
+            rf"{NEG}[^。；\n]{{0,20}}`{re.escape(token)}`",
+        )
+        return any(re.search(p, seg) for p in pats)
+
     for name, text in docs.items():
         for token in sorted(set(re.findall(r"`([A-Z][A-Za-z]{6,})`", text))):
-            if token in fields or token in FIELD_ALLOW or token.isupper():
+            if token in FIELD_ALLOW or token.isupper():
                 continue
-            # 每一处出现都要么在「这个字段没有」的语境里，要么是真字段
-            bad = False
-            for m in re.finditer(re.escape(token), text):
-                line = text[max(0, m.start() - 120):m.start() + 120]
-                if not any(n in line for n in NEG):
-                    bad = True
-                    break
-            if bad:
-                err(f"{name} 里的 `{token}` 既不在字段快照里，上下文也没说它「不存在」——"
-                    f"像是把字段名写错了")
+            occ = [m.start() for m in re.finditer(re.escape(token), text)]
+            neg = any(said_absent(token, pos, text) for pos in occ)
+            if token in fields:
+                # 字段存在，但文档若在同一句里说它「不存在/拿不到」，属于反向错误。
+                if neg:
+                    err(f"{name} 说 `{token}` 不存在/拿不到，但快照里明确有这个字段——"
+                        f"字段存在性写反了")
+                continue
+            if token in ABSENT_OK and neg:
+                continue
+            err(f"{name} 里的 `{token}` 不在字段快照里，也没有明确说它「不存在」——"
+                f"字段名可能拼错；若确属接口未返回，请改写成 `{token}` 不存在并加入 ABSENT_OK")
 
 
 # ------------------------------------------------- 6. 文档里的数字 ↔ 代码常量
@@ -208,8 +226,22 @@ def check_numbers(docs: dict[str, str]) -> None:
         err(f"指标体系 §13 打分卡应为 16 项，实际 {len(rows13)} 项")
     if total_w != 33:
         err(f"指标体系 §13 权重和应为 33，实际 {total_w}（满分 {total_w * 2}）")
-    if "满分 66" in docs["SKILL.md"] and total_w * 2 != 66:
+    if "满分 66" not in docs["SKILL.md"]:
+        err("SKILL 必须明确写「满分 66」；否则校验器无法与 16 项 × 2 对账")
+    elif total_w * 2 != 66:
         err(f"SKILL 写「满分 66」，但文档权重算出来是 {total_w * 2}")
+    if "16 项" not in docs["SKILL.md"]:
+        err("SKILL 必须明确写「16 项」打分卡；否则 16 项结构无法对账")
+
+    # (c2) 采样口径：SKILL 与接入文档必须一致
+    skill_txt = docs["SKILL.md"]
+    if "40~85" not in skill_txt:
+        err("SKILL 应写「40~85 个采样点」")
+    if "1.6" not in skill_txt:
+        err("SKILL 应写采样间隔 ≥1.6 秒")
+    api_txt = docs["references/接入WeStock.md"]
+    if "24~120" in api_txt and "40~85" not in api_txt:
+        err("接入WeStock.md 仍写 24~120，与 SKILL 的 40~85 不一致")
 
     # (d) 取数清单：接口文档 §2 表格行数 ↔ SKILL 声称的次数
     api = docs["references/westock-接口.md"]
@@ -235,8 +267,9 @@ def check_json_keys(docs: dict[str, str]) -> None:
         err("读不到渲染器源码")
         return
     keys = {
-        "meta", "verdict", "price", "core_metrics", "business", "valuation",
-        "financials", "data_gaps", "redflags", "scorecard", "conclusion", "sources",
+        "meta", "verdict", "price", "core_metrics", "core_summary", "business", "valuation",
+        "financials", "data_gaps", "redflags", "redflags_checked", "scorecard",
+        "conclusion", "sources",
     }
     for k in sorted(keys):
         if f'"{k}"' not in renderer:
@@ -268,11 +301,7 @@ def check_skeleton(docs: dict[str, str]) -> None:
 
 # --------------------------------- 9. 八节标题三方对账（骨架 / 范式 / 渲染器）
 def check_section_titles(docs: dict[str, str]) -> None:
-    """SKILL 骨架表、解读范式 §二 小节、渲染器默认标题，三处必须指同一节。
-
-    改名时最容易漏掉其中一处（v2.6.2 改「主要指标初步研判」就手动同步了 5 个文件）。
-    只比「去掉编号后的标题」；允许一方是另一方的前缀（如「财务全景」⊂「财务全景与跨年趋势」）。
-    """
+    """SKILL 骨架表、解读范式 §二 小节、渲染器 SECTION_TITLES，三处必须指同一节。"""
     skill = docs["SKILL.md"]
     seg = skill.split("## 报告骨架")[-1].split("\n---\n")[0]
     skel = {}
@@ -281,26 +310,30 @@ def check_section_titles(docs: dict[str, str]) -> None:
             skel[r[0]] = r[1].strip()
 
     fan = docs["references/解读范式.md"]
-    seg2 = fan.split("\n## 二、")[1].split("\n## ")[0]   # 注意：`### 二、` 里也含「## 二、」
+    seg2 = fan.split("\n## 二、")[1].split("\n## ")[0]
     fan_map = {}
     for m in re.finditer(r"^### ([一二三四五六七八])、(.+)$", seg2, re.M):
         fan_map[m.group(1)] = m.group(2).strip()
 
-    renderer = read("scripts/render_report.py")
-    hard = {}
-    for m in re.finditer(r'^\s*(?:sec_metrics|sec_price)\(\s*"([一二三四五六七八])、([^"]+)"', renderer, re.M):
-        hard[m.group(1)] = m.group(2).strip()
-    for m in re.finditer(r'^\s*title = v\.get\("title"\) or "([一二三四五六七八])、([^"]+)"', renderer, re.M):
-        hard[m.group(1)] = m.group(2).strip()
+    # 骨架节次 → 渲染器 SECTION_TITLES 的 key；改标题必须三处同步。
+    key_map = {
+        "一": "price", "二": "core_metrics", "三": "business", "四": "financials",
+        "五": "redflags", "六": "scorecard", "七": "valuation", "八": "conclusion",
+    }
 
     def same(a: str, b: str) -> bool:
         return a == b or a.startswith(b) or b.startswith(a)
 
     for num, title in skel.items():
+        key = key_map.get(num)
+        expected = SECTION_TITLES.get(key or "")
+        if not expected:
+            err(f"第{num}节在渲染器 SECTION_TITLES 里没有对应 key（{key!r}）")
+            continue
+        if not same(title, expected):
+            err(f"第{num}节标题不一致：骨架写「{num}、{title}」，渲染器写「{expected}」")
         if num in fan_map and not same(title, fan_map[num]):
             err(f"第{num}节标题不一致：骨架写「{num}、{title}」，解读范式写「{num}、{fan_map[num]}」")
-        if num in hard and not same(title, hard[num]):
-            err(f"第{num}节标题不一致：骨架写「{num}、{title}」，渲染器默认写「{num}、{hard[num]}」")
     if set(skel) - set(fan_map):
         warn(f"解读范式 §二 缺这些节的小节标题：{sorted(set(skel) - set(fan_map))}")
 
@@ -313,24 +346,37 @@ def load_snapshot() -> dict:
 
 
 def refresh_snapshot() -> dict:
-    """连 WeStock 重建工具/字段快照（需要 node + 已授权）。"""
+    """连 WeStock 重建工具/字段快照（需要 node + 已授权）。
+
+    字段快照是「三只股票并集」，不是单只股票：某字段只在 600315 出现，
+    单抓 600519 会把它误删。只有全部抓取成功后才原子替换旧快照。
+    """
     client = SKILL / "scripts" / "westock_client.js"
+    codes = ("sh600519", "sz301101", "sh600315")
     snap: dict = {"generated": "", "tools": [], "fields": {}}
     try:
         out = subprocess.run(["node", str(client), "tools"], capture_output=True,
                              text=True, timeout=120).stdout
-        snap["tools"] = [l.split("\t")[0].strip() for l in out.splitlines() if l.strip()]
+        snap["tools"] = sorted(l.split("\t")[0].strip() for l in out.splitlines() if l.strip())
         for kind in ("balance", "income", "cashflow"):
-            p = subprocess.run(
-                ["node", str(client), "call", "data_finance",
-                 json.dumps({"code": "sh600519", "type": kind, "fields": "all", "num": 4})],
-                capture_output=True, text=True, timeout=120)
-            data = json.loads(p.stdout)["data"]["data"]
-            first = next(iter(data.values()))[0]
-            snap["fields"][kind] = sorted(first)
-        snap["generated"] = "live"
+            union: set[str] = set()
+            for code in codes:
+                p = subprocess.run(
+                    ["node", str(client), "call", "data_finance",
+                     json.dumps({"code": code, "type": kind, "fields": "all", "num": 4})],
+                    capture_output=True, text=True, timeout=120)
+                data = json.loads(p.stdout)["data"]["data"]
+                first = next(iter(data.values()))[0]
+                union |= set(first)
+            snap["fields"][kind] = sorted(union)
+        snap["generated"] = (
+            f"{__import__('datetime').date.today().isoformat()} · "
+            f"三只股票并集（600519/301101/600315）"
+        )
         SNAP.parent.mkdir(parents=True, exist_ok=True)
-        SNAP.write_text(json.dumps(snap, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp = SNAP.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(snap, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(SNAP)
         print(f"快照已更新：{len(snap['tools'])} 个工具，"
               f"{sum(len(v) for v in snap['fields'].values())} 个字段 → {SNAP.relative_to(SKILL)}")
     except Exception as e:  # noqa: BLE001

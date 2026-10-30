@@ -17,7 +17,9 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from render_report import get, redflag_head  # noqa: E402
+from render_report import (  # noqa: E402
+    SECTION_TITLES, get, numbered, redflag_head, strip_heading_num,
+)
 
 STATE_TXT = {"pass": "通过", "fail": "否决", "warn": "存疑", "na": "无数据"}
 
@@ -94,25 +96,35 @@ def b_verdict(v: dict) -> str:
     return "\n".join(out)
 
 
-def b_metrics(items: list[dict], title: str = "核心指标") -> str:
+def b_metrics(items: list[dict], title: str = "核心指标", summary: str = "") -> str:
     if not items:
         return ""
     rows = [[t(i.get("label")), t(i.get("value")), t(i.get("note"))] for i in items]
-    return f"## {t(title)}\n\n" + md_table(["指标", "数值", "说明"], rows, "lcl") + "\n"
+    out = f"## {t(title)}\n\n" + md_table(["指标", "数值", "说明"], rows, "lcl") + "\n"
+    if summary:
+        out += f"\n**初步判断：** {t(summary)}\n"
+    return out
 
 
-def b_price(p: dict) -> str:
+def b_price(p: dict, title: str = "股价位置") -> str:
     if not p:
         return ""
-    out = ["## 一、股价位置\n"]
+    out = [f"## {t(title)}\n"]
     recs = p.get("records") or []
     if recs:
         rows = [[t(r.get("name")), t(r.get("range")), t(r.get("note"))] for r in recs]
         out += [md_table(["周期", "最高 / 最低", "说明"], rows, "lcl"), ""]
     cd = p.get("chart_data") or []
     if cd:
-        vals = [float(c["value"]) for c in cd if c.get("value") is not None]
-        lbs = [t(c.get("label")) for c in cd if c.get("value") is not None]
+        vals, lbs = [], []
+        for c in cd:
+            if c.get("value") is None:
+                continue
+            try:
+                vals.append(float(c["value"]))
+                lbs.append(t(c.get("label")))
+            except (TypeError, ValueError):
+                print(f"[warn] 股价图数值不是数字，已跳过：{c.get('value')!r}", file=sys.stderr)
         if len(vals) >= 2:
             seq = " → ".join(f"{l} {v:.2f}" for l, v in zip(lbs, vals))
             lo_i, hi_i = vals.index(min(vals)), vals.index(max(vals))
@@ -172,7 +184,10 @@ def b_moat(m) -> str:
     if mt.get("consistency"):
         out += [f"*{t(mt['consistency'])}*", ""]
 
-    for idx, ch in enumerate(m.get("charts") or []):
+    charts = m.get("charts") or []
+    if charts:
+        out += ["#### ② 两张趋势图：盈利质量与回报\n"]
+    for idx, ch in enumerate(charts):
         out += [describe_chart({**ch, "labels": ch.get("labels") or years}), ""]
 
     r = m.get("roic") or {}
@@ -224,11 +239,11 @@ def _stat(vals):
     return {"n": n, "min": xs[0], "max": xs[-1], "median": mid}
 
 
-def v_valuation(v: dict) -> str:
-    """七、企业估值：当前 PE/PB/PS 的历史位置与分位（MD 版用表 + 文字读法）。"""
+def v_valuation(v: dict, title: str = "企业估值") -> str:
+    """企业估值：当前 PE/PB/PS 的历史位置与分位（MD 版用表 + 文字读法）。"""
     if not v or not (v.get("metrics") or []):
         return ""
-    out = [f"## {t(v.get('title') or '七、企业估值')}\n"]
+    out = [f"## {t(title)}\n"]
     if v.get("lead"):
         out += [t(v["lead"]), ""]
 
@@ -262,10 +277,10 @@ def v_valuation(v: dict) -> str:
     return "\n".join(out)
 
 
-def b_business(b: dict) -> str:
+def b_business(b: dict, title: str = "生意本身") -> str:
     if not b:
         return ""
-    out = ["## 三、生意本身\n"]
+    out = [f"## {t(title)}\n"]
     if b.get("intro"):
         out += [t(b["intro"]), ""]
     segs = b.get("segments") or []
@@ -321,10 +336,10 @@ def describe_chart(ch: dict) -> str:
     return "".join(parts)
 
 
-def b_financials(f: dict) -> str:
+def b_financials(f: dict, title: str = "财务全景与跨年趋势研判") -> str:
     if not f:
         return ""
-    out = [f"## {t(f.get('title') or '财务全景与跨年趋势研判')}\n"]
+    out = [f"## {t(title)}\n"]
     if f.get("lead"):
         out += [t(f["lead"]), ""]
 
@@ -410,23 +425,24 @@ def b_financials(f: dict) -> str:
     return "\n".join(out)
 
 
-def b_trends(tr: dict) -> str:
+def b_trends(tr: dict, title: str = "跨年趋势") -> str:
     """旧版独立趋势块（兼容）。"""
     if not tr or not (tr.get("series") and tr.get("years")):
         return ""
     rows = [[t(s.get("name")), *[t(v) for v in (s.get("values") or [])]]
             for s in tr["series"]]
-    out = [f"## {t(tr.get('title', '多年财务趋势'))}\n",
+    out = [f"## {t(title)}\n",
            md_table(["指标", *[t(y) for y in tr["years"]]], rows), ""]
     if tr.get("comment"):
         out.append(t(tr["comment"]) + "\n")
     return "\n".join(out)
 
 
-def b_latest_old(l: dict) -> str:
+def b_latest_old(l: dict, title: str = "最新财报解读") -> str:
     if not l:
         return ""
-    out = [f"## 最新财报解读（{t(l.get('period'))}）\n"]
+    period = f"（{t(l.get('period'))}）" if l.get("period") else ""
+    out = [f"## {t(title)}{period}\n"]
     if l.get("comment"):
         out += [t(l["comment"]), ""]
     items = l.get("items") or []
@@ -443,10 +459,10 @@ def b_latest_old(l: dict) -> str:
     return "\n".join(out)
 
 
-def b_balance_old(bs: dict) -> str:
+def b_balance_old(bs: dict, title: str = "资产负债与安全边际") -> str:
     if not bs:
         return ""
-    out = ["## 资产负债与安全边际\n"]
+    out = [f"## {t(title)}\n"]
     if bs.get("comment"):
         out += [t(bs["comment"]), ""]
     items = bs.get("items") or []
@@ -461,13 +477,11 @@ def b_balance_old(bs: dict) -> str:
     return "\n".join(out)
 
 
-def b_redflags(items: list[dict], title: str = "排雷扫描") -> str:
-    if not items:
-        return ""
+def b_redflags(items: list[dict], title: str = "排雷扫描", note: str = "") -> str:
     hits = [r for r in items if r.get("hit")]
     out = [f"## {t(redflag_head(title, items))}\n"]
     if not hits:
-        out.append("暂未命中已知的高危组合信号。\n")
+        out.append(t(note or "25 条逐条过，无一命中。") + "\n")
     else:
         rows = [[t(r.get("level")),
                  (f"#{t(r.get('id'))} " if r.get("id") is not None else "") + t(r.get("text")),
@@ -476,7 +490,7 @@ def b_redflags(items: list[dict], title: str = "排雷扫描") -> str:
     return "\n".join(out)
 
 
-def b_scorecard(sc: dict, title: str = "七步研判") -> str:
+def b_scorecard(sc: dict, title: str = "七步研判与打分卡") -> str:
     if not sc:
         return ""
     out = [f"## {t(title)}\n"]
@@ -518,7 +532,7 @@ def b_scorecard(sc: dict, title: str = "七步研判") -> str:
     return "\n".join(out)
 
 
-def b_conclusion(c: dict, title: str = "综合研判") -> str:
+def b_conclusion(c: dict, title: str = "综合研判与跟踪清单") -> str:
     if not c:
         return ""
     out = [f"## {t(title)}\n"]
@@ -555,32 +569,68 @@ def b_sources(items: list) -> str:
 def render_md(data: dict) -> str:
     m = data.get("meta") or {}
     has_new = bool(data.get("financials"))
-    has_val = bool((data.get("valuation") or {}).get("metrics"))
-    blocks = [
-        b_title(m), b_head(m), b_verdict(data.get("verdict") or {}),
-        # 顺序与编号、与笔记范式一致：先看股价位置，再看估值，再看生意，最后看财务
-        b_price(data.get("price") or {}),
-        b_metrics(data.get("core_metrics") or [], "二、主要指标初步研判"),
-        b_business(data.get("business") or {}),
-        b_financials(data.get("financials") or {}),
-        *([] if has_new else [
-            b_trends(data.get("trends") or {}),
-            b_latest_old(data.get("latest") or {}),
-            b_balance_old(data.get("balance") or {}),
-        ]),
-        # v1 结构多出三块，编号整体后移一位（与 HTML 版一致）
-        b_redflags(data.get("redflags") or [],
-                   data.get("redflags_title") or ("五、排雷扫描" if has_new else "六、排雷扫描")),
-        b_scorecard(data.get("scorecard") or {},
-                    data.get("scorecard_title") or ("六、七步研判" if has_new else "七、七步研判")),
-        v_valuation(data.get("valuation") or {}),
-        b_conclusion(data.get("conclusion") or {},
-                     data.get("conclusion_title")
-                     or (("八" if has_val else "七") + "、综合研判"
-                         if has_new else "九、综合研判")),
+
+    specs: list[tuple[str, Any]] = []
+    price = data.get("price") or {}
+    if price:
+        specs.append((SECTION_TITLES["price"], lambda t, d=price: b_price(d, t)))
+    core = data.get("core_metrics") or []
+    if core:
+        specs.append((SECTION_TITLES["core_metrics"],
+                      lambda t, d=core, s=data.get("core_summary") or "": b_metrics(d, t, s)))
+    business = data.get("business") or {}
+    if business:
+        specs.append((SECTION_TITLES["business"], lambda t, d=business: b_business(d, t)))
+
+    fin = data.get("financials") or {}
+    if fin and data.get("charts_title"):
+        fin.setdefault("charts_title", data["charts_title"])
+    if has_new:
+        base = strip_heading_num(fin.get("title"), SECTION_TITLES["financials"])
+        specs.append((base, lambda t, d=fin: b_financials(d, t)))
+    else:
+        trends = data.get("trends") or {}
+        if trends:
+            base = strip_heading_num(trends.get("title"), SECTION_TITLES["trends"])
+            specs.append((base, lambda t, d=trends: b_trends(d, t)))
+        latest = data.get("latest") or {}
+        if latest:
+            specs.append((SECTION_TITLES["latest"],
+                          lambda t, d=latest: b_latest_old(d, t)))
+        balance = data.get("balance") or {}
+        if balance:
+            specs.append((SECTION_TITLES["balance"],
+                          lambda t, d=balance: b_balance_old(d, t)))
+
+    redflags = data.get("redflags") or []
+    if redflags or data.get("redflags_checked") is not None or has_new:
+        base = strip_heading_num(data.get("redflags_title"), SECTION_TITLES["redflags"])
+        specs.append((base, lambda t, d=redflags, n=data.get("redflags_note") or "":
+                      b_redflags(d, t, n)))
+
+    sc = data.get("scorecard") or {}
+    if sc:
+        base = strip_heading_num(data.get("scorecard_title"), SECTION_TITLES["scorecard"])
+        specs.append((base, lambda t, d=sc: b_scorecard(d, t)))
+
+    val = data.get("valuation") or {}
+    if val.get("metrics"):
+        base = strip_heading_num(data.get("valuation_title") or val.get("title"),
+                                 SECTION_TITLES["valuation"])
+        specs.append((base, lambda t, d=val: v_valuation(d, t)))
+
+    concl = data.get("conclusion") or {}
+    if concl:
+        base = strip_heading_num(data.get("conclusion_title"), SECTION_TITLES["conclusion"])
+        specs.append((base, lambda t, d=concl: b_conclusion(d, t)))
+
+    blocks = [b_title(m), b_head(m), b_verdict(data.get("verdict") or {})]
+    for i, (base, fn) in enumerate(specs, 1):
+        blocks.append(fn(numbered(i, base)))
+    blocks.extend([
         b_gaps(data.get("data_gaps") or []),
         b_sources(data.get("sources") or []),
-    ]
+    ])
     body = "\n".join(b for b in blocks if b)
     if m.get("report_date"):
         _at = f"　·　行情时点 {t(m['price_at'])}" if m.get("price_at") else ""

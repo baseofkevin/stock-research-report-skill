@@ -1,5 +1,43 @@
 # 变更记录
 
+## v2.7.0 — 2026-10-30（按全面审计修复：结构闸门、字段事实、结论一致性与双渲染器）
+
+这一版把审计中发现的交付级问题收口，重点不是加功能，而是让「错误的报告出不来」。
+
+**结构闸门（validate.py）**：
+- v2 八节改为必需：缺 `price` / `core_metrics` / `business` / `financials` / `redflags_checked` /
+  `scorecard` / `valuation` / `conclusion` 任一块直接报错，不再静默跳过。
+- `verdict.stance` 必填；`core_summary` 必填且 ≥8 字；`core_metrics` 少于 10 项报错；
+  `scorecard` 少于 16 项报错；`redflags_checked` 必须为 25。
+- `price.chart_data[].value` 必须是数字；`valuation.current` 必须对齐 series 末点；
+  `scorecard.total` 的分母和括号内得分率都要与实算一致。
+- 护城河/估值检查移出 `if financials`，没有财务块也不再跳过。
+
+**数据事实**：
+- 商誉字段改为 `GoodWill`（不是 `Goodwill`），长期借款 `LongtermLoan` 存在；
+  `NonCurrentLiabilityIn1Year`、`TradingAssets`、`ContractLiability`、`PaidInCapital` 在 `fields="all"` 里。
+- 字段数改为「随公司科目变化」：301101 49 / 600315 51 / 600519 53；`core` 实测 24（不是 25）。
+- 补单位陷阱：`data_quote` 历史 `total_market_cap` 是元、当前是亿元；`data_consensus` 金额是万元；
+  `data_profile.regCapital` 是万元。
+
+**结论一致性**：
+- sample/评测用例的 ROIC 拆成「账面 10.8% / 经营 43.1%」；打分卡该项改为 2 分，总分 47/66=71.2%，
+  与「看好但等安全边际」矩阵一致。
+- PE/PB 分位统一为 13.8% / 24.1%；删掉不在 series 内的 2021 年 106 倍叙事；
+  零命中排雷按严格定义重写为 0 / 25，并补 `redflags_checked`。
+
+**渲染器**：
+- 八节编号统一由 `SECTION_TITLES + numbered()` 生成，缺节不再跳号/重号；v1 兼容路径也走同一套。
+- 零命中排雷固定输出「命中 0 / 25 条」，不再整节消失。
+- HTML 补 `financials.charts_title`、护城河 ② 标题；MD 同步；`price.chart_data` 字符串不再崩溃。
+- 修正右轴柱状图基线、`height` 字符串、`core_summary` 渲染。
+
+**文档/对账/测试**：
+- `check_docs.py` 标题对账改为直接读 `SECTION_TITLES`，覆盖一~八；字段检查不再用「不存在」豁免
+  反向错误；`--refresh` 改为三只股票并集、先抓后写、原子替换。
+- `lint_encoding.py` 剥标签插入空格，修 `pctROIC` 误报；表格行不再整行跳过。
+- `evals/run.py` 增加 lint 和节编号连续性断言；新增 moat 对象、零命中、缺节、price 字符串等用例。
+
 ## v2.6.3 — 2026-10-30（把二节的「初步研判」职责写进 SKILL + 标题对账自动化）
 
 上一版把二节改名成「主要指标初步研判」，配套要求却只写进了 `解读范式.md`——

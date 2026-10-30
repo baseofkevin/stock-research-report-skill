@@ -7,9 +7,10 @@
       "expect_valid": true,
       "expect_stance": "看好，但等安全边际",
       "must_contain": [
-        "排雷扫描（命中 4 / 25 条：#9、#23、#14、#20）",
-        "数据缺口与口径风险",
-        "① 单季主表"
+        "排雷扫描（命中 0 / 25 条）",
+        "25 条逐条过，无一命中",
+        "① 单季主表",
+        "初步判断："
       ]
     },
     {
@@ -39,7 +40,8 @@
       "expect_valid": true,
       "must_contain": [
         "不可评",
-        "可评 13 / 16 项"
+        "可评 13 / 16 项",
+        "七、企业估值"
       ]
     },
     {
@@ -49,7 +51,26 @@
       "must_contain": [
         "七、企业估值",
         "历史分位",
-        "中位"
+        "中位",
+        "② 跨年趋势图"
+      ]
+    },
+    {
+      "file": "cases/missing-sections-v2.json",
+      "desc": "缺 5 节 + redflags_checked：结构闸门必须报错",
+      "expect_valid": false,
+      "expect_error_contains": [
+        "缺少必需区块",
+        "redflags_checked"
+      ]
+    },
+    {
+      "file": "cases/price-string-v2.json",
+      "desc": "price 图值是字符串：validate 必须报错，渲染器不能崩",
+      "expect_valid": false,
+      "expect_error_contains": [
+        "price.chart_data",
+        "不是数字"
       ]
     }
   ]

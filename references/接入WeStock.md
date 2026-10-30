@@ -128,8 +128,9 @@ node scripts/westock_client.js call data_finance \
 - 需要**退避 ≥ 60 秒**，否则继续失败。
 - **失败返回的不是 JSON**——脚本必须显式断言，否则会把「被限频」当成「那天没有数据」，
   静默产出一份缺数据的报告。`westock_client.js` 在这一步直接报错退出。
-- 批量采样（例如历史估值分位）**间隔 ≥1.5 秒，月末采样 24~120 个点**，
-  不要逐交易日（1200+ 次必然限频，对分位精度也没有实质提升）。
+- 批量采样（例如历史估值分位）**间隔 ≥1.6 秒，建议月末采样 40~85 个点（最多 120）**；
+  上市不足 4 年就采上市以来全部月末，满 4 年采最近 48 个月末。不要逐交易日（1200+ 次必然限频，
+  对分位精度也没有实质提升）。
 
 ---
 
@@ -153,6 +154,6 @@ node scripts/westock_client.js call data_finance \
 | `没有找到已授权的 westock-mcp 凭据` | 没点过「连接」 | 在 WorkBuddy 里授权一次 |
 | `HTTP 401 / missing or malformed Authorization` | token 过期或被吊销 | 重新授权；脚本 `check` 会显示有效期 |
 | `Unsupported state or unable to authenticate data` | AAD/uid 不匹配，或信封格式变了 | 用账号目录名当 userId；仍失败则按第二节重新确认规则 |
-| 返回纯文本「服务限频」 | 调太快 | 退避 60 秒，间隔调到 ≥1.5 秒 |
+| 返回纯文本「服务限频」 | 调太快 | 退避 60 秒，间隔调到 ≥1.6 秒 |
 | `返回不是 JSON` 但内容像 HTML | 被网关拦了 | 检查网络/代理；确认 `Accept` 头 |
 | 工具名不存在 | 记错名字了 | `tools` 看真实清单 |

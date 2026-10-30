@@ -80,6 +80,10 @@ p:last-child{margin-bottom:0}
   font-size:15px; line-height:1.85; background:#fbf8f4; border:1px solid #ece4d8;
   border-radius:6px; padding:13px 16px; margin-bottom:18px;
 }
+.core-summary{
+  margin-top:16px; padding:12px 15px; background:#f6f1e8;
+  border-left:4px solid var(--accent); border-radius:4px;
+}
 
 /* ---------- 结论卡 ---------- */
 .verdict{border-left:5px solid var(--accent)}
@@ -276,8 +280,16 @@ def cls_num(s: Any) -> str:
 
 def svg_chart(points: list[dict], unit: str = "元") -> str:
     """用季度收盘价画一张简洁的折线面积图。"""
-    vals = [float(p["value"]) for p in points if p.get("value") is not None]
-    labels = [str(p.get("label", "")) for p in points if p.get("value") is not None]
+    pairs = []
+    for p in points:
+        if p.get("value") is None:
+            continue
+        try:
+            pairs.append((str(p.get("label", "")), float(p["value"])))
+        except (TypeError, ValueError):
+            print(f"[warn] 股价图数值不是数字，已跳过：{p.get('value')!r}", file=sys.stderr)
+    vals = [v for _, v in pairs]
+    labels = [l for l, _ in pairs]
     if len(vals) < 2:
         return ""
 
@@ -436,12 +448,14 @@ def svg_multi(labels: list, series: list, unit_l: str = "", unit_r: str = "",
 
     for bi, s in enumerate(bars):
         color = s.get("color") or PALETTE[bi % len(PALETTE)]
+        axis = s.get("axis") or "l"
+        lo = lo_r if axis == "r" else lo_l
         off = -slot * 0.31 + bw * bi + (slot * 0.62 - bw * nb) / 2
         for i, v in enumerate(s["_v"]):
             if v is None:
                 continue
-            top = yy(v, s.get("axis") or "l")
-            base = yy(0 if lo_l < 0 else lo_l, "l")
+            top = yy(v, axis)
+            base = yy(0 if lo < 0 else lo, axis)
             parts.append(
                 f'<rect x="{xc(i) + off:.1f}" y="{min(top, base):.1f}" '
                 f'width="{bw:.1f}" height="{abs(base - top):.1f}" rx="2" '
@@ -521,7 +535,7 @@ def svg_multi(labels: list, series: list, unit_l: str = "", unit_r: str = "",
 # ---------------------------------------------------------------- 区块渲染
 
 
-def sec_metrics(title: str, items: list[dict]) -> str:
+def sec_metrics(title: str, items: list[dict], summary: str = "") -> str:
     if not items:
         return ""
     cells = []
@@ -534,7 +548,10 @@ def sec_metrics(title: str, items: list[dict]) -> str:
             f'<div class="m-note">{esc(it.get("note"))}</div>'
             "</div>"
         )
-    return f"<section><h2>{esc(title)}</h2><div class='grid'>{''.join(cells)}</div></section>"
+    body = f"<div class='grid'>{''.join(cells)}</div>"
+    if summary:
+        body += f"<p class='core-summary'><strong>初步判断：</strong>{_rich(summary)}</p>"
+    return f"<section><h2>{esc(title)}</h2>{body}</section>"
 
 
 def sec_verdict(v: dict) -> str:
@@ -567,11 +584,11 @@ def sec_verdict(v: dict) -> str:
     return "".join(out)
 
 
-def sec_price(data: dict) -> str:
+def sec_price(data: dict, title: str = "股价位置") -> str:
     """股价位置区块：历史区间 + 季 K 走势图。"""
     if not data:
         return ""
-    out = ["<section><h2>一、股价位置</h2>"]
+    out = [f"<section><h2>{esc(title)}</h2>"]
     rows = data.get("records") or []
     if rows:
         out.append(
@@ -650,10 +667,16 @@ def _moat_block(m) -> str:
 
     # ② 趋势图
     charts = m.get("charts") or []
+    if charts:
+        out.append("<h4>② 两张趋势图：盈利质量与回报</h4>")
     for idx, ch in enumerate(charts):
+        try:
+            chart_h = int(float(ch.get("height", 300)))
+        except (TypeError, ValueError):
+            chart_h = 300
         svg = svg_multi(ch.get("labels") or years, ch.get("series") or [],
                         ch.get("unit_l", ""), ch.get("unit_r", ""),
-                        int(ch.get("height", 300)))
+                        chart_h)
         if not svg:
             print(f"[warn] 护城河趋势图「{ch.get('title') or idx + 1}」没有可绘制数值，已跳过",
                   file=sys.stderr)
@@ -819,11 +842,10 @@ def svg_series(points: list, unit: str = "x", tone: str = "mid",
     return "".join(parts)
 
 
-def sec_valuation(v: dict) -> str:
-    """七、企业估值：当前 PE/PB/PS 的历史走势与分位。"""
+def sec_valuation(v: dict, title: str = "企业估值") -> str:
+    """企业估值：当前 PE/PB/PS 的历史走势与分位。"""
     if not v or not (v.get("metrics") or []):
         return ""
-    title = v.get("title") or "七、企业估值"
     out = [f"<section><h2>{esc(title)}</h2>"]
     if v.get("lead"):
         out.append(f"<p class='lead'>{_rich(v['lead'])}</p>")
@@ -867,10 +889,10 @@ def sec_valuation(v: dict) -> str:
     return "".join(out)
 
 
-def sec_business(b: dict) -> str:
+def sec_business(b: dict, title: str = "生意本身") -> str:
     if not b:
         return ""
-    out = ["<section><h2>三、生意本身</h2>"]
+    out = [f"<section><h2>{esc(title)}</h2>"]
     if b.get("intro"):
         out.append(f"<p>{esc(b['intro'])}</p>")
     segs = b.get("segments") or []
@@ -923,11 +945,11 @@ def _matrix_table(headers: list, series: list, first_col: str = "指标",
     return "".join(out)
 
 
-def sec_financials(f: dict) -> str:
+def sec_financials(f: dict, title: str = "财务全景与跨年趋势研判") -> str:
     """财务全景与跨年趋势研判（合并原「多年趋势 + 最新财报 + 资产负债」三块）。"""
     if not f:
         return ""
-    out = [f"<section><h2>{esc(f.get('title') or '财务全景与跨年趋势研判')}</h2>"]
+    out = [f"<section><h2>{esc(title)}</h2>"]
     if f.get("lead"):
         out.append(f"<p class='lead'>{esc(f['lead'])}</p>")
 
@@ -942,17 +964,23 @@ def sec_financials(f: dict) -> str:
 
     # --- 2. 趋势图 ---
     charts = f.get("charts") or []
+    if charts:
+        out.append(f"<h3>{esc(f.get('charts_title') or '② 跨年趋势图')}</h3>")
     for idx, ch in enumerate(charts):
         labels = ch.get("labels") or periods
+        try:
+            chart_h = int(float(ch.get("height", 300)))
+        except (TypeError, ValueError):
+            chart_h = 300
         svg = svg_multi(labels, ch.get("series") or [],
                         ch.get("unit_l", ""), ch.get("unit_r", ""),
-                        int(ch.get("height", 300)))
+                        chart_h)
         if not svg:
             print(f"[warn] 趋势图「{ch.get('title') or f'趋势图 {idx + 1}'}」没有可绘制的数值，"
                   f"已跳过；检查 series[].values 是否全为数字（带 % 或 亿 的字符串画不出来）。",
                   file=sys.stderr)
             continue
-        out.append(f"<h3>{esc(ch.get('title') or f'趋势图 {idx + 1}')}</h3>")
+        out.append(f"<h4>{esc(ch.get('title') or f'趋势图 {idx + 1}')}</h4>")
         out.append(f'<div class="chart-box">{svg}</div>')
         if ch.get("note"):
             out.append(f"<p class='chart-note'>{esc(ch['note'])}</p>")
@@ -1076,13 +1104,13 @@ def sec_financials(f: dict) -> str:
     return "".join(out)
 
 
-def sec_trends(t: dict) -> str:
+def sec_trends(t: dict, title: str = "跨年趋势") -> str:
     """多年财务趋势表（旧版独立区块，保留兼容）。"""
     if not t or not (t.get("series") and t.get("years")):
         return ""
     years = t["years"]
     out = [
-        f"<section><h2>{esc(t.get('title', '多年财务趋势'))}</h2>",
+        f"<section><h2>{esc(title)}</h2>",
         "<div class='tbl-scroll'><table><thead><tr><th>指标</th>",
     ]
     for y in years:
@@ -1101,11 +1129,12 @@ def sec_trends(t: dict) -> str:
     return "".join(out)
 
 
-def sec_latest(l: dict) -> str:
+def sec_latest(l: dict, title: str = "最新财报解读") -> str:
     """最新一期财报解读（旧版独立区块，保留兼容）。"""
     if not l:
         return ""
-    out = [f"<section><h2>四、最新财报解读（{esc(l.get('period'))}）</h2>"]
+    period = f"（{esc(l.get('period'))}）" if l.get("period") else ""
+    out = [f"<section><h2>{esc(title)}{period}</h2>"]
     if l.get("comment"):
         out.append(f"<p>{esc(l['comment'])}</p>")
     items = l.get("items") or []
@@ -1139,11 +1168,11 @@ def sec_latest(l: dict) -> str:
     return "".join(out)
 
 
-def sec_balance(bs: dict) -> str:
+def sec_balance(bs: dict, title: str = "资产负债与安全边际") -> str:
     """资产负债表明细 + 安全指标（旧版独立区块，保留兼容）。"""
     if not bs:
         return ""
-    out = ["<section><h2>五、资产负债与安全边际</h2>"]
+    out = [f"<section><h2>{esc(title)}</h2>"]
     if bs.get("comment"):
         out.append(f"<p>{esc(bs['comment'])}</p>")
     items = bs.get("items") or []
@@ -1185,32 +1214,53 @@ def sec_balance(bs: dict) -> str:
 
 REDFLAG_TOTAL = 25
 
+CN_NUMS = "一二三四五六七八九十"
+
+# 八节标题的唯一来源：骨架、范式、渲染器都从这里对账。
+SECTION_TITLES = {
+    "price": "股价位置",
+    "core_metrics": "主要指标初步研判",
+    "business": "生意本身",
+    "financials": "财务全景与跨年趋势研判",
+    "trends": "跨年趋势",
+    "latest": "最新财报解读",
+    "balance": "资产负债与安全边际",
+    "redflags": "排雷扫描",
+    "scorecard": "七步研判与打分卡",
+    "valuation": "企业估值",
+    "conclusion": "综合研判与跟踪清单",
+}
+
+
+def strip_heading_num(text: str, fallback: str = "") -> str:
+    """去掉标题里自带的中文编号，编号统一由渲染器生成。"""
+    s = str(text or "").strip()
+    s = re.sub(r"^[一二三四五六七八九十]+、\s*", "", s)
+    return s or fallback
+
+
+def numbered(i: int, base: str) -> str:
+    """第 i 节（从 1 开始）→「一、xxx」。"""
+    if 1 <= i <= len(CN_NUMS):
+        return f"{CN_NUMS[i - 1]}、{base}"
+    return f"{i}、{base}"
+
 
 def redflag_head(title: str, items: list[dict]) -> str:
-    """排雷区块标题。
-
-    分母固定为清单条数（25），不再拿「传进来的条数」当分母——
-    否则只列命中项时会显示成「命中 4 / 4 项」，看着像全中。
-    """
+    """排雷区块标题：分母永远固定为 25，缺 id 也不退化成列表长度。"""
     hits = [r for r in items if r.get("hit")]
     ids = [str(r.get("id")) for r in hits if r.get("id") is not None]
-    if ids:
-        tail = "、".join("#" + i for i in ids)
-        return f"{title}（命中 {len(hits)} / {REDFLAG_TOTAL} 条：{tail}）"
-    if len(items) > len(hits):
-        return f"{title}（命中 {len(hits)} / {len(items)} 条）"
-    return f"{title}（命中 {len(hits)} 条）"
+    tail = ("：" + "、".join("#" + i for i in ids)) if ids else ""
+    return f"{title}（命中 {len(hits)} / {REDFLAG_TOTAL} 条{tail}）"
 
 
-def sec_redflags(items: list[dict], title: str = "排雷扫描") -> str:
-    if not items:
-        return ""
+def sec_redflags(items: list[dict], title: str = "排雷扫描", note: str = "") -> str:
     hits = [r for r in items if r.get("hit")]
     out = [
         f"<section><h2>{esc(redflag_head(title, items))}</h2>",
     ]
     if not hits:
-        out.append("<p>暂未命中已知的高危组合信号。</p>")
+        out.append(f"<p>{esc(note or '25 条逐条过，无一命中。')}</p>")
     else:
         out.append(
             "<div class='tbl-scroll'><table><thead><tr><th class='center'>等级</th>"
@@ -1231,7 +1281,7 @@ def sec_redflags(items: list[dict], title: str = "排雷扫描") -> str:
     return "".join(out)
 
 
-def sec_scorecard(sc: dict, title: str = "七步研判") -> str:
+def sec_scorecard(sc: dict, title: str = "七步研判与打分卡") -> str:
     """七步研判结论 + 加权评分条。"""
     if not sc:
         return ""
@@ -1298,7 +1348,7 @@ def sec_scorecard(sc: dict, title: str = "七步研判") -> str:
     return "".join(out)
 
 
-def sec_conclusion(c: dict, title: str = "综合研判") -> str:
+def sec_conclusion(c: dict, title: str = "综合研判与跟踪清单") -> str:
     if not c:
         return ""
     out = [f"<section class='concl'><h2>{esc(title)}</h2>"]
@@ -1377,40 +1427,79 @@ def render(data: dict) -> str:
     m = data.get("meta") or {}
     title = f'{m.get("name", "个股")}（{m.get("code", "")}）企业信息解读'
     has_new = bool(data.get("financials"))
-    has_val = bool((data.get("valuation") or {}).get("metrics"))
     sv = data.get("schema_version", m.get("schema_version"))
     if str(sv) != "2":
         print(f"[warn] schema_version={sv!r}，脚本按 v2 结构渲染；"
               f"v1 旧样例会整块丢掉「财务全景」章节，请对照 scripts/sample.json。",
               file=sys.stderr)
-    body = "".join([
-        build_hero(m),
-        sec_verdict(data.get("verdict") or {}),
-        # 顺序与编号、与笔记范式一致：先看股价位置，再看估值，再看生意，最后看财务
-        sec_price(data.get("price") or {}),
-        sec_metrics("二、主要指标初步研判", data.get("core_metrics") or []),
-        sec_business(data.get("business") or {}),
-        # 新版：财务全景（合并多年趋势 / 最新财报 / 资产负债）
-        sec_financials(data.get("financials") or {}),
-        # 旧版三块：仅在未提供 financials 时输出
-        *(([] if has_new else [
-            sec_trends(data.get("trends") or {}),
-            sec_latest(data.get("latest") or {}),
-            sec_balance(data.get("balance") or {}),
-        ])),
-        # v1 结构多出「趋势 / 最新 / 资产负债」三块，后续编号整体后移一位
-        sec_redflags(data.get("redflags") or [],
-                     data.get("redflags_title") or ("五、排雷扫描" if has_new else "六、排雷扫描")),
-        sec_scorecard(data.get("scorecard") or {},
-                      data.get("scorecard_title") or ("六、七步研判" if has_new else "七、七步研判")),
-        sec_valuation(data.get("valuation") or {}),
-        sec_conclusion(data.get("conclusion") or {},
-                       data.get("conclusion_title")
-                       or (("八" if has_val else "七") + "、综合研判"
-                           if has_new else "九、综合研判")),
+
+    # 先按实际存在的区块生成 specs，再统一编号：缺哪节都不会让编号跳号/重号。
+    specs: list[tuple[str, str, Any]] = []
+    price = data.get("price") or {}
+    if price:
+        specs.append(("price", SECTION_TITLES["price"],
+                      lambda t, d=price: sec_price(d, t)))
+    core = data.get("core_metrics") or []
+    if core:
+        specs.append(("core_metrics", SECTION_TITLES["core_metrics"],
+                      lambda t, d=core, s=data.get("core_summary") or "": sec_metrics(t, d, s)))
+    business = data.get("business") or {}
+    if business:
+        specs.append(("business", SECTION_TITLES["business"],
+                      lambda t, d=business: sec_business(d, t)))
+
+    fin = data.get("financials") or {}
+    if fin and data.get("charts_title"):
+        fin.setdefault("charts_title", data["charts_title"])
+    if has_new:
+        fin_base = strip_heading_num(fin.get("title"), SECTION_TITLES["financials"])
+        specs.append(("financials", fin_base,
+                      lambda t, d=fin: sec_financials(d, t)))
+    else:
+        trends = data.get("trends") or {}
+        if trends:
+            base = strip_heading_num(trends.get("title"), SECTION_TITLES["trends"])
+            specs.append(("trends", base, lambda t, d=trends: sec_trends(d, t)))
+        latest = data.get("latest") or {}
+        if latest:
+            specs.append(("latest", SECTION_TITLES["latest"],
+                          lambda t, d=latest: sec_latest(d, t)))
+        balance = data.get("balance") or {}
+        if balance:
+            specs.append(("balance", SECTION_TITLES["balance"],
+                          lambda t, d=balance: sec_balance(d, t)))
+
+    redflags = data.get("redflags") or []
+    if redflags or data.get("redflags_checked") is not None or has_new:
+        base = strip_heading_num(data.get("redflags_title"), SECTION_TITLES["redflags"])
+        specs.append(("redflags", base,
+                      lambda t, d=redflags, n=data.get("redflags_note") or "":
+                      sec_redflags(d, t, n)))
+
+    sc = data.get("scorecard") or {}
+    if sc:
+        base = strip_heading_num(data.get("scorecard_title"), SECTION_TITLES["scorecard"])
+        specs.append(("scorecard", base, lambda t, d=sc: sec_scorecard(d, t)))
+
+    val = data.get("valuation") or {}
+    if val.get("metrics"):
+        base = strip_heading_num(data.get("valuation_title") or val.get("title"),
+                                 SECTION_TITLES["valuation"])
+        specs.append(("valuation", base, lambda t, d=val: sec_valuation(d, t)))
+
+    concl = data.get("conclusion") or {}
+    if concl:
+        base = strip_heading_num(data.get("conclusion_title"), SECTION_TITLES["conclusion"])
+        specs.append(("conclusion", base, lambda t, d=concl: sec_conclusion(d, t)))
+
+    chunks = [build_hero(m), sec_verdict(data.get("verdict") or {})]
+    for i, (_key, base, fn) in enumerate(specs, 1):
+        chunks.append(fn(numbered(i, base)))
+    chunks.extend([
         sec_gaps(data.get("data_gaps") or []),
         sec_sources(data.get("sources") or []),
     ])
+    body = "".join(chunks)
     date_line = ""
     if m.get("report_date"):
         date_line = f'<footer>{esc(m["report_date"])} 生成　·　' \

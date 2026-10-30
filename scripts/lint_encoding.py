@@ -27,7 +27,7 @@ ALLOW = {
     "true", "false", "null", "name", "value", "label", "yoy", "id", "code",
     "income", "balance", "cashflow", "financials", "scorecard", "watchlist",
     "valuation", "moat", "business", "infopubldate", "enddate", "series",
-    "westock", "variables", "charset", "utf", "lang", "type", "meta", "data",
+    "westock", "websearch", "webfetch", "variables", "charset", "utf", "lang", "type", "meta", "data",
     "points", "paths", "polygon", "polyline", "rect", "circle", "span", "div",
     "none", "solid", "flex", "grid", "rgb", "rgba", "px", "em", "rem", "pt",
     "sans", "serif", "linear", "gradient", "box", "shadow", "margin", "stroke",
@@ -105,7 +105,7 @@ def _lines(path: Path):
         # 先去掉 <style>/<script>（CSS 注释与 JS 会被当成重复字符/乱码），
         # 再还原实体、剥标签
         raw = re.sub(r"<(style|script)\b.*?</\1>", "", raw, flags=re.S | re.I)
-        raw = TAG.sub("", _html.unescape(raw))
+        raw = TAG.sub(" ", _html.unescape(raw))
     lines = raw.splitlines()
     return list(enumerate(lines, 1))
 
@@ -149,13 +149,15 @@ def suspicious(path: Path):
             continue
         if in_fence:
             continue
-        # 跳过表格行与纯英文名单行
-        if line.lstrip().startswith("|") or line.lstrip().startswith("ALLOW"):
+        is_table = line.lstrip().startswith("|")
+        # 跳过纯英文名单行；表格行仍查占位符/重复字符，但不做「中文夹拉丁串」判断
+        # （表格里 name/tagline/values 这类 JSON 键是正常内容，不是乱码）。
+        if line.lstrip().startswith("ALLOW"):
             continue
         # 1. 中文行里夹着孤立的拉丁串（>=4 字母且不在白名单）
         #    先剔掉反引号内的代码片段，避免把工具名误判为乱码
         probe, in_code = _strip_code(line, in_code)
-        if BAD_CN.search(probe):
+        if BAD_CN.search(probe) and not is_table:
             for m in LATIN.finditer(probe):
                 w = m.group()
                 # 全大写 + 下划线的接口名/枚举（RPT_F10_FINANCE_G）不是乱码，跳过
