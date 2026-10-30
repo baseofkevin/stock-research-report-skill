@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""回归测试：对 evals/cases/ 下每个样例跑 validate + 两个渲染器，按 cases.json 断言。
+"""回归测试：对 evals/cases/ 下每个样例跑 validate + 两个渲染器，按 cases.json 断言；
+最后再跑一遍 scripts/check_docs.py（文档里的数字/工具名/字段名/章节号与代码对账）。
 
 用法:
     python3 evals/run.py            # 全跑
@@ -80,7 +81,18 @@ def main() -> int:
             print(f"        ! {p}")
         failed += bool(problems)
 
-    print(f"\n{len(man['cases']) - failed}/{len(man['cases'])} 通过")
+    print(f"\n{len(man['cases']) - failed}/{len(man['cases'])} 个用例通过")
+
+    # ---- 文档交叉引用检查（改文档忘了改代码，是这类 skill 最常见的错） ----
+    rc, out, err = run([sys.executable, str(SCRIPTS / "check_docs.py")])
+    tail = [l for l in (out or "").splitlines() if l.strip()][-1:] or [err[:200]]
+    print(f"[{'PASS' if rc == 0 else 'FAIL'}] 文档交叉引用 — {tail[0]}")
+    if rc != 0:
+        for line in out.splitlines():
+            if line.startswith("[错误]"):
+                print(f"        ! {line[len('[错误] '):]}")
+        failed += 1
+
     return 1 if failed else 0
 
 
