@@ -2,7 +2,7 @@
 name: stock-research-report
 version: 2.7.2
 schema_version: "2"
-updated: 2026-10-30
+updated: 2026-10-30 16:54
 description: 输入股票代码或名称，从腾讯自选股（WeStock）调取行情、季K线、三大报表、机构预期等数据，按用户私人笔记的解读范式完成企业分析，并输出美化布局的 HTML 企业信息解读报告。触发词：企业信息解读、个股分析、解读一下、股票分析、帮我看看 XXXX、财报解读、研报式个股分析。
 ---
 
