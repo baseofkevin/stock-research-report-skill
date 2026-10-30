@@ -66,7 +66,11 @@ def _check_valuation(data: dict, rep: Report) -> None:
         if not _num(cur) or float(cur) <= 0:
             rep.err(f"估值指标「{name}」current={cur!r} 必须是正数")
             continue
-        good = [float(x) for x in series if _num(x) and float(x) > 0]
+        good = []          # 兼容 [{d,v}] 与 [v] 两种写法
+        for item in series:
+            val = item.get("v") if isinstance(item, dict) else item
+            if _num(val) and float(val) > 0:
+                good.append(float(val))
         if len(good) < 20:
             rep.warn(f"估值指标「{name}」只有 {len(good)} 个历史样本（建议 ≥20，否则分位不可信）")
         if not good:

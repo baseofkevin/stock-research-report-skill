@@ -719,75 +719,108 @@ def _stats(vals: list) -> dict:
     return {"n": n, "min": xs[0], "max": xs[-1], "median": mid}
 
 
-def svg_hist(values: list, current, unit: str = "x", height: int = 200,
-             tone: str | None = None) -> str:
-    """历史分布直方图 + 当前值竖线：回答“现在贵不贵，在这段历史里排第几”。"""
-    xs = [float(v) for v in values if isinstance(v, (int, float)) and v > 0]
-    if len(xs) < 5 or not isinstance(current, (int, float)):
+def _points(series: list) -> list:
+    """兼容两种写法：[{d,v},…]（带日期，推荐）或 [v,…]（旧写法，横轴退化为序号）。"""
+    pts = []
+    for i, it in enumerate(series or []):
+        if isinstance(it, dict):
+            d, v = it.get("d"), it.get("v")
+        else:
+            d, v = str(i), it
+        if isinstance(v, (int, float)) and v > 0:
+            pts.append((str(d), float(v)))
+    return pts
+
+
+def svg_series(points: list, unit: str = "x", tone: str = "mid",
+               median: float | None = None, height: int = 230) -> str:
+    """横轴时间、纵轴估值：一条曲线 + 中位虚线 + 当前值标在曲线末端。"""
+    if len(points) < 5:
         return ""
-    cur = float(current)
-    lo, hi = min(min(xs), cur), max(max(xs), cur)
-    if hi <= lo:
-        hi = lo + 1
-    w, pad_l, pad_r, pad_t, pad_b = 980, 34, 22, 40, 34
+    vals = [v for _, v in points]
+    lo, hi = min(vals), max(vals)
+    if median is not None:
+        lo, hi = min(lo, median), max(hi, median)
+    span = hi - lo or 1
+    lo, hi = lo - span * 0.10, hi + span * 0.16
+    w, pad_l, pad_r, pad_t, pad_b = 980, 46, 40, 26, 34
     plot_h = height - pad_t - pad_b
-    nb = 22
-    binw = (hi - lo) / nb
-    counts = [0] * nb
-    for v in xs:
-        counts[min(int((v - lo) / binw), nb - 1)] += 1
-    mh = max(counts) or 1
-    stat = _stats(xs)
-    pct = 100 * sum(1 for v in xs if v < cur) / len(xs)
+    n = len(points)
+    color = {"ok": "#14663a", "high": "#c0392b", "mid": "#b7791f", "na": "#6b7280"}.get(tone, "#b7791f")
 
-    def xx(v: float) -> float:
-        return pad_l + (w - pad_l - pad_r) * (v - lo) / (hi - lo)
+    def xx(i: int) -> float:
+        return pad_l + (w - pad_l - pad_r) * (i / (n - 1))
 
-    bw = (w - pad_l - pad_r) / nb
-    parts = [f'<svg viewBox="0 0 {w} {height}" role="img" aria-label="历史分布">']
-    # 基线
-    base_y = pad_t + plot_h
-    parts.append(f'<line x1="{pad_l}" y1="{base_y}" x2="{w - pad_r}" y2="{base_y}" '
-                 f'stroke="#d8d3ca" stroke-width="1"/>')
-    for i, c in enumerate(counts):
-        if not c:
+    def yy(v: float) -> float:
+        return pad_t + plot_h * (hi - v) / (hi - lo)
+
+    def lab(v: float) -> str:
+        return f"{v:.1f}" if abs(v) < 100 else f"{v:.0f}"
+
+    parts = [f'<svg viewBox="0 0 {w} {height}" role="img" aria-label="估值时间序列">']
+    for frac in (0, .25, .5, .75, 1):
+        gy = pad_t + plot_h * frac
+        gv = hi - (hi - lo) * frac
+        parts.append(f'<line x1="{pad_l}" y1="{gy:.1f}" x2="{w - pad_r}" y2="{gy:.1f}" '
+                     f'stroke="#e6e3dd" stroke-width="1"/>')
+        parts.append(f'<text x="{pad_l - 8}" y="{gy + 4:.1f}" text-anchor="end" '
+                     f'font-size="10.5" fill="#8b93a1">{lab(gv)}</text>')
+    # 面积 + 曲线
+    pts = [(xx(i), yy(v)) for i, (_, v) in enumerate(points)]
+    base = pad_t + plot_h
+    parts.append('<polygon points="' + " ".join(f"{p:.1f},{q:.1f}" for p, q in pts)
+                 + f' {pts[-1][0]:.1f},{base:.1f} {pts[0][0]:.1f},{base:.1f}" '
+                 f'fill="{color}" opacity=".07"/>')
+    parts.append('<polyline points="' + " ".join(f"{p:.1f},{q:.1f}" for p, q in pts)
+                 + '" fill="none" stroke="#6b7280" stroke-width="1.8" stroke-linejoin="round"/>')
+    # 中位
+    if median is not None:
+        my = yy(median)
+        parts.append(f'<line x1="{pad_l}" y1="{my:.1f}" x2="{w - pad_r}" y2="{my:.1f}" '
+                     f'stroke="#8b93a1" stroke-width="1.2" stroke-dasharray="5 4"/>')
+        parts.append(f'<text x="{w - pad_r - 4}" y="{my - 6:.1f}" text-anchor="end" '
+                     f'font-size="10.5" fill="#8b93a1">中位 {median:.1f}{esc(unit)}</text>')
+    # 当前值：竖线 + 圆点 + 标签
+    cx, cy = pts[-1]
+    parts.append(f'<line x1="{cx:.1f}" y1="{pad_t}" x2="{cx:.1f}" y2="{base:.1f}" '
+                 f'stroke="{color}" stroke-width="1" stroke-dasharray="3 3" opacity=".55"/>')
+    parts.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="5" fill="#fff" stroke="{color}" stroke-width="2.6"/>')
+    parts.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="2.2" fill="{color}"/>')
+    label = f"当前 {points[-1][1]:g}{unit}"
+    lx = min(cx, w - pad_r - 52)
+    ly = cy - 14 if cy - 14 > pad_t + 8 else cy + 22
+    parts.append(f'<text x="{lx:.1f}" y="{ly:.1f}" text-anchor="end" font-size="12" '
+                 f'font-weight="700" fill="{color}">{esc(label)}</text>')
+    # 横轴：每年取一个刻度（年份），末端补当前日期；挤在一起的就丢掉
+    ticks, kind, seen = [], {}, set()
+    for i, (d, _) in enumerate(points):
+        y = d[:4]
+        if y not in seen:
+            seen.add(y)
+            ticks.append(i)
+            kind[i] = "year"
+    if n - 1 not in kind:
+        ticks.append(n - 1)
+        kind[n - 1] = "last"
+    spaced = []
+    for i in ticks:
+        if spaced and xx(i) - xx(spaced[-1]) < 48:
+            if kind.get(i) == "last":
+                spaced[-1] = i
+                kind[i] = "last"
             continue
-        bh = plot_h * c / mh
-        parts.append(
-            f'<rect x="{pad_l + i * bw + bw * 0.12:.1f}" y="{base_y - bh:.1f}" '
-            f'width="{bw * 0.76:.1f}" height="{bh:.1f}" rx="1.5" '
-            f'fill="#b9b3aa" opacity=".55"/>'
-        )
-    # 中位数
-    mx = xx(stat["median"])
-    parts.append(f'<line x1="{mx:.1f}" y1="{pad_t - 6}" x2="{mx:.1f}" y2="{base_y}" '
-                 f'stroke="#8b93a1" stroke-width="1.2" stroke-dasharray="4 3"/>')
-    parts.append(f'<text x="{mx:.1f}" y="{pad_t - 12}" text-anchor="middle" '
-                 f'font-size="10.5" fill="#8b93a1">中位 {stat["median"]:.1f}{unit}</text>')
-    # 当前值
-    cx = xx(cur)
-    pct_cls = "pos" if pct <= 20 else ("neg" if pct >= 80 else "mid")
-    if tone:                       # 数据可以覆盖：PE 这种“名义低位”不该画成绿色
-        pct_cls = {"ok": "pos", "high": "neg", "mid": "mid"}.get(tone, pct_cls)
-    color = {"pos": "#14663a", "neg": "#c0392b", "mid": "#b7791f"}[pct_cls]
-    parts.append(f'<line x1="{cx:.1f}" y1="{pad_t - 8}" x2="{cx:.1f}" y2="{base_y}" '
-                 f'stroke="{color}" stroke-width="2.6"/>')
-    parts.append(f'<circle cx="{cx:.1f}" cy="{base_y}" r="3.6" fill="{color}"/>')
-    label = f"当前 {cur:.1f}{unit} · 历史 {pct:.0f}% 分位"
-    anchor_x = min(max(cx, pad_l + 80), w - pad_r - 90)
-    parts.append(f'<text x="{anchor_x:.1f}" y="{pad_t - 26}" text-anchor="middle" '
-                 f'font-size="12.5" font-weight="700" fill="{color}">{esc(label)}</text>')
-    # 横轴：只标两端，中位由虚线单独标注（否则中间刻度会被误读成中位）
-    for v, anch in ((lo, "start"), (hi, "end")):
-        parts.append(f'<text x="{xx(v):.1f}" y="{base_y + 20:.1f}" '
-                     f'text-anchor="{anch}" font-size="10.5" fill="#8b93a1">'
-                     f'{v:.1f}{unit}</text>')
+        spaced.append(i)
+    for i in spaced:
+        d = points[i][0]
+        tick = d[:4] if kind.get(i) == "year" else d[2:7].replace("-", "/")
+        parts.append(f'<text x="{xx(i):.1f}" y="{base + 20:.1f}" text-anchor="middle" '
+                     f'font-size="10.5" fill="#8b93a1">{esc(tick)}</text>')
     parts.append("</svg>")
     return "".join(parts)
 
 
 def sec_valuation(v: dict) -> str:
-    """七、企业估值：当前 PE/PB/PS 在历史分布里的位置与分位。"""
+    """七、企业估值：当前 PE/PB/PS 的历史走势与分位。"""
     if not v or not (v.get("metrics") or []):
         return ""
     title = v.get("title") or "七、企业估值"
@@ -797,12 +830,13 @@ def sec_valuation(v: dict) -> str:
 
     for m in v.get("metrics") or []:
         unit = m.get("unit") or "x"
-        series = m.get("series") or []
+        pts = _points(m.get("series") or [])
         cur = m.get("current")
-        stat = _stats(series)
-        if not stat or not isinstance(cur, (int, float)):
+        vals = [x for _, x in pts]
+        if len(vals) < 5 or not isinstance(cur, (int, float)):
             continue
-        pct = 100 * sum(1 for x in series if isinstance(x, (int, float)) and 0 < x < cur) / stat["n"]
+        stat = _stats(vals)
+        pct = 100 * sum(1 for x in vals if x < cur) / len(vals)
         tone = m.get("tone") or ("ok" if pct <= 20 else ("high" if pct >= 80 else "mid"))
         cls = {"ok": "lv-ok", "high": "lv-high", "mid": "lv-mid", "na": "lv-na"}.get(tone, "lv-mid")
         badge = m.get("badge") or (
@@ -815,9 +849,10 @@ def sec_valuation(v: dict) -> str:
             f"<span class='val-cur'>{cur:g}{esc(unit)}</span>"
             f"<span class='lv {cls}'>{esc(badge)}</span>"
             f"<span class='val-sub'>中位 {stat['median']:.1f}{esc(unit)}　·　"
-            f"区间 {stat['min']:.1f}–{stat['max']:.1f}{esc(unit)}　·　样本 {stat['n']} 个</span></div>"
+            f"区间 {stat['min']:.1f}–{stat['max']:.1f}{esc(unit)}　·　样本 {stat['n']} 个　·　"
+            f"{esc(pts[0][0][:7])} 起</span></div>"
         )
-        svg = svg_hist(series, cur, unit, tone=tone)
+        svg = svg_series(pts, unit, tone=tone, median=stat["median"])
         if svg:
             out.append(f'<div class="chart-box" style="border:none;background:none;padding:0">{svg}</div>')
         if m.get("note"):

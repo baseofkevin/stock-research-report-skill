@@ -202,6 +202,19 @@ def b_moat(m) -> str:
     return "\n".join(out)
 
 
+def _pts(series):
+    """与 HTML 版同一套解析：支持 [{d,v}] 与 [v]。"""
+    out = []
+    for it in series or []:
+        if isinstance(it, dict):
+            d, v = it.get("d", ""), it.get("v")
+        else:
+            d, v = "", it
+        if isinstance(v, (int, float)) and v > 0:
+            out.append((str(d), float(v)))
+    return out
+
+
 def _stat(vals):
     xs = sorted(v for v in vals if isinstance(v, (int, float)) and v > 0)
     if not xs:
@@ -222,19 +235,23 @@ def v_valuation(v: dict) -> str:
     rows, notes = [], []
     for m in v.get("metrics") or []:
         unit = m.get("unit") or "x"
-        stat = _stat(m.get("series") or [])
+        pts = _pts(m.get("series") or [])
+        vals = [x for _, x in pts]
+        stat = _stat(vals)
         cur = m.get("current")
         if not stat or not isinstance(cur, (int, float)):
             continue
-        pct = 100 * sum(1 for x in m["series"] if isinstance(x, (int, float)) and 0 < x < cur) / stat["n"]
+        pct = 100 * sum(1 for x in vals if x < cur) / len(vals)
+        span = f"{pts[0][0][:7]} 起" if pts and pts[0][0] else ""
         rows.append([t(m.get("name")), f"{cur:g}{unit}", f"{pct:.0f}%",
                      f"{stat['median']:.1f}{unit}",
-                     f"{stat['min']:.1f}–{stat['max']:.1f}{unit}", str(stat["n"])])
+                     f"{stat['min']:.1f}–{stat['max']:.1f}{unit}",
+                     f"{stat['n']}{(' · ' + span) if span else ''}"])
         notes.append((m, pct))
     if rows:
         out += [md_table(["指标", "当前", "历史分位", "中位", "区间", "样本"], rows, "lccccc"), ""]
-        out.append("> HTML 版对每个指标画一张历史分布直方图，竖线标出当前值；"
-                   "本 Markdown 版用上面的表代替。\n")
+        out.append("> HTML 版对每个指标画一条历史估值曲线（横轴时间、纵轴倍数），"
+                   "当前值标在曲线末端；本 Markdown 版用上面的表和下面的读法代替。\n")
     for m, pct in notes:
         if m.get("note"):
             out += [f"- **{t(m.get('name'))}**：{t(m['note'])}", ""]
