@@ -26,6 +26,7 @@ ALLOW = {
     "mcp", "python", "skill", "readme", "note", "size", "level", "text",
     "true", "false", "null", "name", "value", "label", "yoy", "id", "code",
     "income", "balance", "cashflow", "financials", "scorecard", "watchlist",
+    "valuation", "moat", "business", "infopubldate", "enddate", "series",
     "westock", "variables", "charset", "utf", "lang", "type", "meta", "data",
     "points", "paths", "polygon", "polyline", "rect", "circle", "span", "div",
     "none", "solid", "flex", "grid", "rgb", "rgba", "px", "em", "rem", "pt",
