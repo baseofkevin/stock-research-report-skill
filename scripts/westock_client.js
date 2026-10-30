@@ -144,7 +144,7 @@ function toolText(resp) {
   return content.map((c) => c.text || '').join('');
 }
 
-(async () => {
+async function main() {
   const cmd = process.argv[2] || 'check';
   const { url } = findEndpoint();
   const t = getToken();
@@ -194,4 +194,11 @@ function toolText(resp) {
   }
 
   die(`未知命令 ${cmd}；可用：check / tools / call`);
-})();
+}
+
+// 作为模块被 require 时只导出能力，不执行 CLI
+module.exports = { findEndpoint, getToken, open, rpc, toolText };
+
+if (require.main === module) {
+  main().catch((e) => die(e.stack || String(e)));
+}

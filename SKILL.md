@@ -1,6 +1,6 @@
 ---
 name: stock-research-report
-version: 2.1.0
+version: 2.4.0
 schema_version: "2"
 updated: 2026-10-28
 description: 输入股票代码或名称，从腾讯自选股（WeStock）调取行情、季K线、三大报表、机构预期等数据，按用户私人笔记的解读范式完成企业分析，并输出美化布局的 HTML 企业信息解读报告。触发词：企业信息解读、个股分析、解读一下、股票分析、帮我看看 XXXX、财报解读、研报式个股分析。
@@ -132,6 +132,10 @@ data_score        → 诊股评分（只作交叉参考，不替代自己的判�
   **营运资本占用（应收 + 存货 − 应付）与产业链地位**、在建工程趋势、商誉占净资产比、
   **其他应收款占总资产比**
 - **§8 安全**：资产负债率（**剔合同负债**）、有息负债及其趋势、**毛利额 ÷ 利息费用**
+- **估值分位（第七节）**：PE / PB / PS 三个都要给，各画一张历史分布图，
+  标出当前值、中位线、分位百分比；**三个分位要一起读**，并把口径说清楚
+  （PE 为负的年份不进样本；一次性收益、商誉减值会污染分母）。
+  PE 被一次性收益垫低时要给出「剔除后 PE」并重算分位——名义便宜≠真便宜。
 - **§9 护城河**：① 五指标按年铺开（**FCF、FCF/营收、净利率、ROE、ROA**，≥5 年）；
   ② 两张趋势图（FCF 柱 + FCF/营收 线；净利率/ROE/ROA 三线）；
   ③ **ROIC 减 WACC**（贴出 Rf / ERP / β 假设，看差值正负与是否收窄）；
@@ -222,6 +226,7 @@ python3 $S/lint_encoding.py  报告.html 报告.md   # ② 产物乱码自检，
 | `price` | records[]（历史区间）/ chart_data[{label,value}] / comment | 一、股价位置 + SVG 走势图 |
 | `core_metrics` | [{label, value, note, flag(ok·warn·bad)}]，建议 ≥10 项 | 二、核心指标与估值 |
 | `business` | intro / segments[{name,rev_pct,margin,comment}] / moat / policy / upstream / downstream | 三、生意本身 |
+| `valuation` | title / lead / metrics[{key(pe·pb·ps), name, unit, current, series[], tone?, badge?, note}] / comment / note。**series 是历史样本数组，渲染器自己算分位、中位、区间**；`tone`（ok·mid·high）用来覆盖徽章配色，`badge` 覆盖文案（比如「名义 0% 分位（口径失真）」）。分位 = 低于当前值的样本数 ÷ 有效样本数 | 七、企业估值：三张历史分布图 |
 | `business.moat` | **对象**：text / strength(wide·narrow·none) / strength_text / strength_note / years[] / metrics{rows[{key,name,unit,values[]}], judge, consistency} / charts[{title,labels?,unit_l,unit_r,series}] / roic{value,wacc,spread,note} / sources[{type,strength(strong·mid·weak·none),evidence}] / verdict。**纯字符串仍然兼容，但会告警**（缺表、缺图、缺 ROIC/WACC）。rows 的 key 必须是 fcf / fcf_margin / net_margin / roe / roa 五个 | 护城河：五指标表 + 两张趋势图 + ROIC/WACC + 来源表 |
 | `financials` | **财务全景（合并块，见下表）** | 四、财务全景与跨年趋势研判 |
 | `data_gaps` | [] 字符串列表：拿不到的指标 + 它对哪个判断的影响 | 数据缺口与口径风险 |
@@ -297,7 +302,8 @@ python3 $S/lint_encoding.py  报告.html 报告.md   # ② 产物乱码自检，
 
 ## 变更记录
 
-见 `CHANGELOG.md`。v2.2.0 起：接口文档按 2026-10-28 实测重写（`fields="all"` 能拿到
+见 `CHANGELOG.md`。v2.4.0 起：第七节「企业估值」给 PE/PB/PS 三张历史分布图 +
+分位百分比（`valuation` 块）。v2.2.0 起：接口文档按 2026-10-28 实测重写（`fields="all"` 能拿到
 49 个资产负债表字段、`_Q` 单季字段、`data_quote` 的 `date` 参数、限频阈值）；
 `num=16`、`price_at`、`data_gaps`、缺项归一化、结论矩阵、`validate.py`；
 修掉渲染器的轴单位叠字、排雷分母、图表静默跳过、MD 七步表空白、加权总分重复五处缺陷。

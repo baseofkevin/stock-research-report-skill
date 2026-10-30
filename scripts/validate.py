@@ -42,6 +42,50 @@ def _num(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+VAL_KEYS = {"pe", "pb", "ps"}
+
+
+def _check_valuation(data: dict, rep: Report) -> None:
+    """企业估值块：当前值在历史分布里的分位。"""
+    v = data.get("valuation")
+    if not v:
+        rep.warn("valuation 缺失：七、企业估值 一节不会出现（PE/PB/PS 历史分位图）")
+        return
+    metrics = v.get("metrics") or []
+    if not metrics:
+        rep.err("valuation.metrics 为空")
+        return
+    keys = {str(m.get("key")) for m in metrics}
+    lack = VAL_KEYS - keys
+    if lack:
+        rep.warn(f"valuation.metrics 缺 {sorted(lack)}：PE / PB / PS 三个都要给图")
+    for m in metrics:
+        name = m.get("name") or m.get("key")
+        cur = m.get("current")
+        series = m.get("series") or []
+        if not _num(cur) or float(cur) <= 0:
+            rep.err(f"估值指标「{name}」current={cur!r} 必须是正数")
+            continue
+        good = [float(x) for x in series if _num(x) and float(x) > 0]
+        if len(good) < 20:
+            rep.warn(f"估值指标「{name}」只有 {len(good)} 个历史样本（建议 ≥20，否则分位不可信）")
+        if not good:
+            continue
+        calc = 100 * sum(1 for x in good if x < float(cur)) / len(good)
+        declared = m.get("percentile")
+        if declared is not None and _num(declared):
+            if abs(float(declared) - calc) > 3:
+                rep.err(f"估值指标「{name}」percentile={declared} 与按 series 重算的 "
+                        f"{calc:.1f}% 相差超过 3pct——分位数字和图画的对不上")
+        if float(cur) > max(good) * 1.0001 or float(cur) < min(good) * 0.9999:
+            rep.warn(f"估值指标「{name}」当前值 {cur} 落在历史区间 "
+                     f"{min(good):.2f}~{max(good):.2f} 之外，确认是否口径不同")
+    if not v.get("lead"):
+        rep.warn("valuation.lead 为空：这一节要有一句话结论")
+    if not v.get("note"):
+        rep.warn("valuation.note 为空：样本区间与口径要写清楚")
+
+
 MOAT_STRENGTHS = {"wide", "narrow", "none"}
 MOAT_SRC_STRENGTHS = {"strong", "mid", "weak", "none"}
 MOAT_CORE_ROWS = {"fcf", "net_margin", "roe"}
@@ -222,6 +266,7 @@ def check(path: Path, rep: Report) -> None:
                     rep.err(f"图「{ctitle}」序列「{sname}」type 只能是 bar/line")
 
         _check_moat(data, rep)
+        _check_valuation(data, rep)
 
         lat = f.get("latest") or {}
         if f and not lat.get("items"):

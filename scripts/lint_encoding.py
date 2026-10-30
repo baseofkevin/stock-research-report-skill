@@ -109,9 +109,27 @@ def _lines(path: Path):
     return list(enumerate(lines, 1))
 
 
+def _strip_code(line: str, in_code: bool):
+    """剔除行内代码片段；代码块可能跨行（`metrics[...]` 折到下一行），要带状态。"""
+    out, i = [], 0
+    while i < len(line):
+        if line[i] == "`":
+            j = line.find("`", i + 1)
+            if j < 0:
+                in_code = not in_code
+                break
+            i = j + 1
+            continue
+        if not in_code:
+            out.append(line[i])
+        i += 1
+    return "".join(out), in_code
+
+
 def suspicious(path: Path):
     issues = []
     in_fence = False
+    in_code = False
     in_frontmatter = False
     fm_seen = 0
     for i, line in _lines(path):
@@ -135,12 +153,15 @@ def suspicious(path: Path):
             continue
         # 1. 中文行里夹着孤立的拉丁串（>=4 字母且不在白名单）
         #    先剔掉反引号内的代码片段，避免把工具名误判为乱码
-        probe = re.sub(r"`[^`]*`", "", line)
+        probe, in_code = _strip_code(line, in_code)
         if BAD_CN.search(probe):
             for m in LATIN.finditer(probe):
                 w = m.group()
                 # 全大写 + 下划线的接口名/枚举（RPT_F10_FINANCE_G）不是乱码，跳过
                 if w.isupper() and len(w) >= 3:
+                    continue
+                # snake_case 标识符（fcf_margin / schema_version）是代码不是乱码
+                if "_" in w and re.fullmatch(r"[a-z0-9_]+", w):
                     continue
                 if len(w) >= 4 and w.lower() not in ALLOW:
                     issues.append((i, f"可疑拉丁串 {w!r}", line.strip()[:60]))

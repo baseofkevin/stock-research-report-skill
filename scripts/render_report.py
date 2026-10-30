@@ -170,6 +170,13 @@ td.rowhead{
 .chart-box{border:1px solid var(--line); border-radius:6px; padding:14px; background:#fcfbfa}
 .chart-box svg{width:100%; height:auto; display:block}
 .chart-note{font-size:12.5px; color:var(--sub); margin-top:10px; line-height:1.7}
+.val-item{border:1px solid var(--line); border-radius:6px; padding:14px 16px 6px;
+  background:#fcfbfa; margin-bottom:14px}
+.val-head{display:flex; align-items:baseline; gap:11px; flex-wrap:wrap; margin-bottom:8px}
+.val-name{font-weight:700; font-size:14.5px; color:#3a4252}
+.val-cur{font-family:"DejaVu Sans Mono",monospace; font-size:20px; font-weight:700; color:#9d2a2a}
+.val-sub{font-size:12.5px; color:var(--sub)}
+.val-note{font-size:12.5px; color:var(--sub); margin:2px 0 0}
 .moat-head{display:flex; align-items:center; gap:9px; margin:6px 0 10px}
 .moat-sub{font-size:12.5px; color:var(--sub)}
 .moat-judge{margin:10px 0 4px}
@@ -702,6 +709,129 @@ def _moat_block(m) -> str:
     return "".join(out)
 
 
+def _stats(vals: list) -> dict:
+    """给一组估值样本算分位/中位/区间（当前值单独传）。"""
+    xs = sorted(v for v in vals if isinstance(v, (int, float)) and v > 0)
+    if not xs:
+        return {}
+    n = len(xs)
+    mid = xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2
+    return {"n": n, "min": xs[0], "max": xs[-1], "median": mid}
+
+
+def svg_hist(values: list, current, unit: str = "x", height: int = 200,
+             tone: str | None = None) -> str:
+    """历史分布直方图 + 当前值竖线：回答“现在贵不贵，在这段历史里排第几”。"""
+    xs = [float(v) for v in values if isinstance(v, (int, float)) and v > 0]
+    if len(xs) < 5 or not isinstance(current, (int, float)):
+        return ""
+    cur = float(current)
+    lo, hi = min(min(xs), cur), max(max(xs), cur)
+    if hi <= lo:
+        hi = lo + 1
+    w, pad_l, pad_r, pad_t, pad_b = 980, 34, 22, 40, 34
+    plot_h = height - pad_t - pad_b
+    nb = 22
+    binw = (hi - lo) / nb
+    counts = [0] * nb
+    for v in xs:
+        counts[min(int((v - lo) / binw), nb - 1)] += 1
+    mh = max(counts) or 1
+    stat = _stats(xs)
+    pct = 100 * sum(1 for v in xs if v < cur) / len(xs)
+
+    def xx(v: float) -> float:
+        return pad_l + (w - pad_l - pad_r) * (v - lo) / (hi - lo)
+
+    bw = (w - pad_l - pad_r) / nb
+    parts = [f'<svg viewBox="0 0 {w} {height}" role="img" aria-label="历史分布">']
+    # 基线
+    base_y = pad_t + plot_h
+    parts.append(f'<line x1="{pad_l}" y1="{base_y}" x2="{w - pad_r}" y2="{base_y}" '
+                 f'stroke="#d8d3ca" stroke-width="1"/>')
+    for i, c in enumerate(counts):
+        if not c:
+            continue
+        bh = plot_h * c / mh
+        parts.append(
+            f'<rect x="{pad_l + i * bw + bw * 0.12:.1f}" y="{base_y - bh:.1f}" '
+            f'width="{bw * 0.76:.1f}" height="{bh:.1f}" rx="1.5" '
+            f'fill="#b9b3aa" opacity=".55"/>'
+        )
+    # 中位数
+    mx = xx(stat["median"])
+    parts.append(f'<line x1="{mx:.1f}" y1="{pad_t - 6}" x2="{mx:.1f}" y2="{base_y}" '
+                 f'stroke="#8b93a1" stroke-width="1.2" stroke-dasharray="4 3"/>')
+    parts.append(f'<text x="{mx:.1f}" y="{pad_t - 12}" text-anchor="middle" '
+                 f'font-size="10.5" fill="#8b93a1">中位 {stat["median"]:.1f}{unit}</text>')
+    # 当前值
+    cx = xx(cur)
+    pct_cls = "pos" if pct <= 20 else ("neg" if pct >= 80 else "mid")
+    if tone:                       # 数据可以覆盖：PE 这种“名义低位”不该画成绿色
+        pct_cls = {"ok": "pos", "high": "neg", "mid": "mid"}.get(tone, pct_cls)
+    color = {"pos": "#14663a", "neg": "#c0392b", "mid": "#b7791f"}[pct_cls]
+    parts.append(f'<line x1="{cx:.1f}" y1="{pad_t - 8}" x2="{cx:.1f}" y2="{base_y}" '
+                 f'stroke="{color}" stroke-width="2.6"/>')
+    parts.append(f'<circle cx="{cx:.1f}" cy="{base_y}" r="3.6" fill="{color}"/>')
+    label = f"当前 {cur:.1f}{unit} · 历史 {pct:.0f}% 分位"
+    anchor_x = min(max(cx, pad_l + 80), w - pad_r - 90)
+    parts.append(f'<text x="{anchor_x:.1f}" y="{pad_t - 26}" text-anchor="middle" '
+                 f'font-size="12.5" font-weight="700" fill="{color}">{esc(label)}</text>')
+    # 横轴：只标两端，中位由虚线单独标注（否则中间刻度会被误读成中位）
+    for v, anch in ((lo, "start"), (hi, "end")):
+        parts.append(f'<text x="{xx(v):.1f}" y="{base_y + 20:.1f}" '
+                     f'text-anchor="{anch}" font-size="10.5" fill="#8b93a1">'
+                     f'{v:.1f}{unit}</text>')
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def sec_valuation(v: dict) -> str:
+    """七、企业估值：当前 PE/PB/PS 在历史分布里的位置与分位。"""
+    if not v or not (v.get("metrics") or []):
+        return ""
+    title = v.get("title") or "七、企业估值"
+    out = [f"<section><h2>{esc(title)}</h2>"]
+    if v.get("lead"):
+        out.append(f"<p class='lead'>{_rich(v['lead'])}</p>")
+
+    for m in v.get("metrics") or []:
+        unit = m.get("unit") or "x"
+        series = m.get("series") or []
+        cur = m.get("current")
+        stat = _stats(series)
+        if not stat or not isinstance(cur, (int, float)):
+            continue
+        pct = 100 * sum(1 for x in series if isinstance(x, (int, float)) and 0 < x < cur) / stat["n"]
+        tone = m.get("tone") or ("ok" if pct <= 20 else ("high" if pct >= 80 else "mid"))
+        cls = {"ok": "lv-ok", "high": "lv-high", "mid": "lv-mid", "na": "lv-na"}.get(tone, "lv-mid")
+        badge = m.get("badge") or (
+            f"历史 {pct:.0f}% 分位"
+            + ("（历史低位）" if pct <= 20 else ("（历史高位）" if pct >= 80 else ""))
+        )
+        out.append("<div class='val-item'>")
+        out.append(
+            f"<div class='val-head'><span class='val-name'>{esc(m.get('name'))}</span>"
+            f"<span class='val-cur'>{cur:g}{esc(unit)}</span>"
+            f"<span class='lv {cls}'>{esc(badge)}</span>"
+            f"<span class='val-sub'>中位 {stat['median']:.1f}{esc(unit)}　·　"
+            f"区间 {stat['min']:.1f}–{stat['max']:.1f}{esc(unit)}　·　样本 {stat['n']} 个</span></div>"
+        )
+        svg = svg_hist(series, cur, unit, tone=tone)
+        if svg:
+            out.append(f'<div class="chart-box" style="border:none;background:none;padding:0">{svg}</div>')
+        if m.get("note"):
+            out.append(f"<p class='val-note'>{_rich(m['note'])}</p>")
+        out.append("</div>")
+
+    if v.get("comment"):
+        out.append(f"<blockquote>{_rich(v['comment'])}</blockquote>")
+    if v.get("note"):
+        out.append(f"<p class='chart-note'>{_rich(v['note'])}</p>")
+    out.append("</section>")
+    return "".join(out)
+
+
 def sec_business(b: dict) -> str:
     if not b:
         return ""
@@ -1212,6 +1342,7 @@ def render(data: dict) -> str:
     m = data.get("meta") or {}
     title = f'{m.get("name", "个股")}（{m.get("code", "")}）企业信息解读'
     has_new = bool(data.get("financials"))
+    has_val = bool((data.get("valuation") or {}).get("metrics"))
     sv = data.get("schema_version", m.get("schema_version"))
     if str(sv) != "2":
         print(f"[warn] schema_version={sv!r}，脚本按 v2 结构渲染；"
@@ -1237,8 +1368,11 @@ def render(data: dict) -> str:
                      data.get("redflags_title") or ("五、排雷扫描" if has_new else "六、排雷扫描")),
         sec_scorecard(data.get("scorecard") or {},
                       data.get("scorecard_title") or ("六、七步研判" if has_new else "七、七步研判")),
+        sec_valuation(data.get("valuation") or {}),
         sec_conclusion(data.get("conclusion") or {},
-                       data.get("conclusion_title") or ("七、综合研判" if has_new else "八、综合研判")),
+                       data.get("conclusion_title")
+                       or (("八" if has_val else "七") + "、综合研判"
+                           if has_new else "九、综合研判")),
         sec_gaps(data.get("data_gaps") or []),
         sec_sources(data.get("sources") or []),
     ])

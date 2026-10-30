@@ -41,6 +41,16 @@
         "不可评",
         "可评 13 / 16 项"
       ]
+    },
+    {
+      "file": "cases/valuation-v2.json",
+      "desc": "v2 + 企业估值块（PE/PB/PS 历史分位），验证分位与 series 自洽、三个指标都有图",
+      "expect_valid": true,
+      "must_contain": [
+        "七、企业估值",
+        "历史分位",
+        "中位"
+      ]
     }
   ]
 }

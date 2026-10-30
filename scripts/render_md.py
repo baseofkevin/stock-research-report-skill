@@ -202,6 +202,49 @@ def b_moat(m) -> str:
     return "\n".join(out)
 
 
+def _stat(vals):
+    xs = sorted(v for v in vals if isinstance(v, (int, float)) and v > 0)
+    if not xs:
+        return {}
+    n = len(xs)
+    mid = xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2
+    return {"n": n, "min": xs[0], "max": xs[-1], "median": mid}
+
+
+def v_valuation(v: dict) -> str:
+    """七、企业估值：当前 PE/PB/PS 的历史位置与分位（MD 版用表 + 文字读法）。"""
+    if not v or not (v.get("metrics") or []):
+        return ""
+    out = [f"## {t(v.get('title') or '七、企业估值')}\n"]
+    if v.get("lead"):
+        out += [t(v["lead"]), ""]
+
+    rows, notes = [], []
+    for m in v.get("metrics") or []:
+        unit = m.get("unit") or "x"
+        stat = _stat(m.get("series") or [])
+        cur = m.get("current")
+        if not stat or not isinstance(cur, (int, float)):
+            continue
+        pct = 100 * sum(1 for x in m["series"] if isinstance(x, (int, float)) and 0 < x < cur) / stat["n"]
+        rows.append([t(m.get("name")), f"{cur:g}{unit}", f"{pct:.0f}%",
+                     f"{stat['median']:.1f}{unit}",
+                     f"{stat['min']:.1f}–{stat['max']:.1f}{unit}", str(stat["n"])])
+        notes.append((m, pct))
+    if rows:
+        out += [md_table(["指标", "当前", "历史分位", "中位", "区间", "样本"], rows, "lccccc"), ""]
+        out.append("> HTML 版对每个指标画一张历史分布直方图，竖线标出当前值；"
+                   "本 Markdown 版用上面的表代替。\n")
+    for m, pct in notes:
+        if m.get("note"):
+            out += [f"- **{t(m.get('name'))}**：{t(m['note'])}", ""]
+    if v.get("comment"):
+        out += ["> " + t(v["comment"]), ""]
+    if v.get("note"):
+        out += [f"*{t(v['note'])}*", ""]
+    return "\n".join(out)
+
+
 def b_business(b: dict) -> str:
     if not b:
         return ""
@@ -495,6 +538,7 @@ def b_sources(items: list) -> str:
 def render_md(data: dict) -> str:
     m = data.get("meta") or {}
     has_new = bool(data.get("financials"))
+    has_val = bool((data.get("valuation") or {}).get("metrics"))
     blocks = [
         b_title(m), b_head(m), b_verdict(data.get("verdict") or {}),
         # 顺序与编号、与笔记范式一致：先看股价位置，再看估值，再看生意，最后看财务
@@ -512,8 +556,11 @@ def render_md(data: dict) -> str:
                    data.get("redflags_title") or ("五、排雷扫描" if has_new else "六、排雷扫描")),
         b_scorecard(data.get("scorecard") or {},
                     data.get("scorecard_title") or ("六、七步研判" if has_new else "七、七步研判")),
+        v_valuation(data.get("valuation") or {}),
         b_conclusion(data.get("conclusion") or {},
-                     data.get("conclusion_title") or ("七、综合研判" if has_new else "八、综合研判")),
+                     data.get("conclusion_title")
+                     or (("八" if has_val else "七") + "、综合研判"
+                         if has_new else "九、综合研判")),
         b_gaps(data.get("data_gaps") or []),
         b_sources(data.get("sources") or []),
     ]
