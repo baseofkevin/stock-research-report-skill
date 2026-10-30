@@ -1,6 +1,6 @@
 ---
 name: stock-research-report
-version: 2.5.0
+version: 2.5.1
 schema_version: "2"
 updated: 2026-10-30
 description: 输入股票代码或名称，从腾讯自选股（WeStock）调取行情、季K线、三大报表、机构预期等数据，按用户私人笔记的解读范式完成企业分析，并输出美化布局的 HTML 企业信息解读报告。触发词：企业信息解读、个股分析、解读一下、股票分析、帮我看看 XXXX、财报解读、研报式个股分析。
@@ -89,7 +89,7 @@ node scripts/westock_client.js call data_finance '{"code":"sz301101","fields":"a
 
 ### 第 1 步 · 取数
 
-按 `references/westock-接口.md` 的清单调用。**最小集合（16 项）**：
+按 `references/westock-接口.md` 第二节的清单调用。**16 次接口调用 + 1 轮历史采样**（`data_kline`、`data_quote` 各用两次；采样那一行本身要跑 40~85 次）：
 
 ```
 data_search       → 名称转代码
@@ -106,8 +106,6 @@ data_quote        → 再按 date=YYYY-MM-DD 做**月末采样**（上市满 3 �
                        退避 ≥60 秒再续；脚本要断言返回是 JSON，别把限频当成「那天没数据」
                      ※ PS 需要分母：同一次 `data_finance` 里的 `OperatingRevenueTTM`，
                        按 `InfoPublDate` 做前视过滤（不用未来的报表算过去的 PS）
-东财 F10          → 资本支出（WeStock 没有这个科目），FCF = 经营现金流 − 资本支出 必需
-                     RPT_F10_FINANCE_GCASHFLOW.CONSTRUCT_LONG_ASSET，按年报取
 data_consensus    → 机构一致预期（动态 PE 的来源）
 data_rating       → 机构评级
 data_dividend     → years=5                            （分红连续性）
@@ -118,6 +116,13 @@ data_news         → limit=20
 data_sector       → mode=search 后 constituent         （同业对比）
 data_score        → 诊股评分（只作交叉参考，不替代自己的判断）
 ```
+
+**另有两个补充动作，不属于 WeStock 接口，但同样必须做**：
+
+| 动作 | 做法 | 为什么必需 |
+|---|---|---|
+| 估值月末采样 | `data_quote(date=YYYY-MM-DD)` 逐月跑 40~85 次（见上面第 8 行） | 第七节的 PE/PB/PS 曲线全靠它，没有它这一节出不来 |
+| 资本支出 | 东财 F10 `RPT_F10_FINANCE_GCASHFLOW.CONSTRUCT_LONG_ASSET`，按年报取 | WeStock 现金流量表无此科目；没有它算不出 FCF，第三节护城河缺一半 |
 
 **为什么是 16 期（4 年），不是 8 期**：单季倒挤、同季同比、TTM 三件事同时要数据——
 算 2026Q3 单季要 2026 中报；算同季同比要 2025Q3 累计；算 TTM 要 2025 年报。

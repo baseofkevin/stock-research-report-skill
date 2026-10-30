@@ -233,8 +233,9 @@ def check(path: Path, rep: Report) -> None:
     else:
         if len(periods) < MIN_PERIODS:
             rep.err(f"financials.periods 只有 {len(periods)} 期，至少 {MIN_PERIODS} 期（覆盖近 2 年全部季报）")
-        elif len(periods) < 16:
-            rep.warn(f"financials.periods 只有 {len(periods)} 期，SKILL 要求 16 期"
+        elif len(periods) < 12:
+            rep.warn(f"financials.periods 只有 {len(periods)} 期：够最低门槛"
+                     f"（≥{MIN_PERIODS} 期），但建议拉满接口的 16 期"
                      f"（单季倒挤 + 同季同比 + TTM 都要用）；若接口就这么多，报告里要说明")
         for row in qt:
             name = row.get("name", "?")
