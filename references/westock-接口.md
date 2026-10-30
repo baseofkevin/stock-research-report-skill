@@ -28,7 +28,7 @@
 | 1 | `data_search` | `query` | 名称 → 代码 |
 | 2 | `data_disclosure` | `code` | **报告期确认**：最新定期报告的 `reportEndDate` + `disclosureDate` |
 | 3 | `data_quote` | `code` | 现价、涨跌幅、市值、`pe_ratio`(TTM) / `pe_lyr`(静态) / `pe_fwd`(动态)、`pb_ratio`、`dividend_ratio_ttm` |
-| 4 | `data_kline` | `code`, `period=season`, `limit=40`, `fq=qfq` | **季 K 线**：判断股价历史位置（第 1 段） |
+| 4 | `data_kline` | `code`, `period=season`, `limit=40`, `fq=qfq` | **季 K 线**：判断股价历史位置（一节） |
 | 5 | `data_kline` | `code`, `period=year`, `limit=10`, `fq=qfq` | 年 K：补长周期高低点 |
 | 6 | `data_profile` | `code` | 主营、行业、股本、上市日期（**不含估值**，别指望它给 PE/PB） |
 | 7 | `data_finance` | `code`, `fields="all"`, `num=16` | **三大报表全字段**，见第三节 |

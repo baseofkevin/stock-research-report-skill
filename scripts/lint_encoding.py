@@ -171,7 +171,9 @@ def suspicious(path: Path):
             if re.search(pat, line):
                 issues.append((i, f"未完成的占位符 {pat}", line.strip()[:60]))
         # 3. 连续重复的非空白、非字母数字字符（>=4 次），如「！！！！」
-        for m in re.finditer(r"([^\w\s])\1{3,}", line):
+        #    行首的 markdown 标题井号不算（#### 是合法语法）
+        body = re.sub(r"^#{1,6}\s", "", line)
+        for m in re.finditer(r"([^\w\s])\1{3,}", body):
             issues.append((i, f"重复字符 {m.group()!r}", line.strip()[:60]))
     return issues
 
