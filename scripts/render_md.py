@@ -560,7 +560,7 @@ def render_md(data: dict) -> str:
         b_title(m), b_head(m), b_verdict(data.get("verdict") or {}),
         # 顺序与编号、与笔记范式一致：先看股价位置，再看估值，再看生意，最后看财务
         b_price(data.get("price") or {}),
-        b_metrics(data.get("core_metrics") or [], "二、核心指标与估值"),
+        b_metrics(data.get("core_metrics") or [], "二、主要指标初步研判"),
         b_business(data.get("business") or {}),
         b_financials(data.get("financials") or {}),
         *([] if has_new else [

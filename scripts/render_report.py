@@ -1388,7 +1388,7 @@ def render(data: dict) -> str:
         sec_verdict(data.get("verdict") or {}),
         # 顺序与编号、与笔记范式一致：先看股价位置，再看估值，再看生意，最后看财务
         sec_price(data.get("price") or {}),
-        sec_metrics("二、核心指标与估值", data.get("core_metrics") or []),
+        sec_metrics("二、主要指标初步研判", data.get("core_metrics") or []),
         sec_business(data.get("business") or {}),
         # 新版：财务全景（合并多年趋势 / 最新财报 / 资产负债）
         sec_financials(data.get("financials") or {}),

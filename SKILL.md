@@ -1,6 +1,6 @@
 ---
 name: stock-research-report
-version: 2.6.1
+version: 2.6.2
 schema_version: "2"
 updated: 2026-10-30
 description: 输入股票代码或名称，从腾讯自选股（WeStock）调取行情、季K线、三大报表、机构预期等数据，按用户私人笔记的解读范式完成企业分析，并输出美化布局的 HTML 企业信息解读报告。触发词：企业信息解读、个股分析、解读一下、股票分析、帮我看看 XXXX、财报解读、研报式个股分析。
@@ -60,7 +60,7 @@ node scripts/westock_client.js call data_finance '{"code":"sz301101","fields":"a
 | 节 | 标题 | 内容 | 必备图/表 | JSON 键 |
 |---|---|---|---|---|
 | 一 | 股价位置 | 历史区间、当前分位、均线状态 | 季度收盘价走势 | `price` |
-| 二 | 核心指标与估值 | 摘要卡片（≥10 项） | 指标卡网格 | `core_metrics` |
+| 二 | 主要指标初步研判 | 摘要卡片（≥10 项） | 指标卡网格 | `core_metrics` |
 | 三 | 生意本身 | 卖什么、产业链地位、**护城河** | 分部表 + **五指标表 + 两张趋势图 + ROIC/WACC 卡 + 来源表** | `business` / `business.moat` |
 | 四 | 财务全景与跨年趋势 | 单季 + 同季同比 + TTM 三层口径 | 多张趋势图 + 资产负债明细 | `financials` |
 | 五 | 排雷扫描 | 25 条清单只列命中项 | — | `redflags` |
@@ -274,7 +274,7 @@ python3 evals/run.py               # 回归用例 + 上面这一项，一起跑
 | `meta` | name / code / tagline / price / **price_at** / change_pct / chg_note / market_cap / industry / report_date | 顶部横幅 + 页脚时点 |
 | `verdict` | stance / level(good·mid·bad·watch) / headline / summary / tags[] | 结论卡 |
 | `price` | records[]（历史区间）/ chart_data[{label,value}] / comment | 一、股价位置 + SVG 走势图 |
-| `core_metrics` | [{label, value, note, flag(ok·warn·bad)}]，建议 ≥10 项 | 二、核心指标与估值 |
+| `core_metrics` | [{label, value, note, flag(ok·warn·bad)}]，建议 ≥10 项 | 二、主要指标初步研判 |
 | `business` | intro / segments[{name,rev_pct,margin,comment}] / moat（**对象，见下行**）/ policy / upstream / downstream | 三、生意本身 |
 | `valuation` | title / lead / metrics[{key(pe·pb·ps), name, unit, current, series[{d,v}], tone?, badge?, note}] / comment / note。**series 是带日期的历史样本（`[{"d":"2021-06-30","v":60.2},…]`，也兼容纯数值数组），渲染器自己算分位、中位、区间并画走势图**；`tone`（ok·mid·high）用来覆盖徽章配色，`badge` 覆盖文案（比如「名义 0% 分位（口径失真）」）。分位 = 低于当前值的样本数 ÷ 有效样本数 | 七、企业估值：三条历史走势曲线 |
 | `business.moat` | **对象**：text / strength(wide·narrow·none) / strength_text / strength_note / years[] / metrics{rows[{key,name,unit,values[]}], judge, consistency} / charts[{title,labels?,unit_l,unit_r,series}] / roic{value,wacc,spread,note} / sources[{type,strength(strong·mid·weak·none),evidence}] / verdict。**纯字符串仍然兼容，但会告警**（缺表、缺图、缺 ROIC/WACC）。rows 的 key 必须是 fcf / fcf_margin / net_margin / roe / roa 五个 | 护城河：五指标表 + 两张趋势图 + ROIC/WACC + 来源表 |
