@@ -5,7 +5,9 @@
  * 用途：当 agent 所在环境没有把 data_* 工具挂上来（例如在 DSH / 终端里跑），
  *      但本机 WorkBuddy 已经连接过腾讯自选股时，用这个脚本取数。
  *
- * 依赖：Node ≥ 18（用内置 crypto + fetch），零第三方包。
+ * 依赖：Node ≥ 18（内置 crypto + node:https / node:http），零第三方包。
+ *       **不用全局 fetch**：部分容器/沙箱里 undici 的 llhttp WASM 分配失败
+ *       （RangeError: WebAssembly.instantiate(): Out of memory），fetch 会直接抛错。
  * 安全：只读取本机已授权的凭据，不做任何绕过；token 只在内存里，不打印、不落盘。
  *
  * 用法：
@@ -13,6 +15,7 @@
  *   node westock_client.js tools
  *   node westock_client.js call data_quote '{"code":"sz301101"}'
  *   node westock_client.js call data_finance '{"code":"sz301101","fields":"all","num":16}' > /tmp/fin.json
+ *   node westock_client.js selftest      # 离线自检（不发请求）：纯文本返回必须被判为非 JSON
  *
  * 环境变量：
  *   WORKBUDDY_HOME   自定义 ~/.workbuddy 位置
@@ -102,6 +105,38 @@ function getToken() {
 /* ---------- MCP over streamable-http ---------- */
 let SESSION = '';
 
+/**
+ * 用 node:https 直接发请求，**不用全局 fetch**。
+ * 原因：部分沙箱/容器里 undici 的 llhttp WASM 分配失败
+ * （RangeError: WebAssembly.instantiate(): Out of memory），
+ * 会让 fetch 直接抛错、整个客户端不可用；node:https 走纯 C++ 栈，没有这个问题。
+ */
+function postOnce(target, headers, body) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(target);
+    const mod = u.protocol === 'http:' ? require('http') : require('https');
+    const req = mod.request(
+      {
+        hostname: u.hostname,
+        port: u.port || (u.protocol === 'http:' ? 80 : 443),
+        path: u.pathname + u.search,
+        method: 'POST',
+        headers: { ...headers, 'Content-Length': Buffer.byteLength(body) },
+      },
+      (res) => {
+        let data = '';
+        res.setEncoding('utf8');
+        res.on('data', (c) => (data += c));
+        res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, text: data }));
+      }
+    );
+    req.setTimeout(60000, () => req.destroy(new Error('请求超时 60s')));
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
 async function rpc(url, token, payload) {
   const headers = {
     Authorization: `Bearer ${token}`,
@@ -110,12 +145,12 @@ async function rpc(url, token, payload) {
   };
   if (SESSION) headers['Mcp-Session-Id'] = SESSION;
 
-  const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
-  const sid = res.headers.get('mcp-session-id');
+  const res = await postOnce(url, headers, JSON.stringify(payload));
+  const sid = res.headers['mcp-session-id'];
   if (sid) SESSION = sid;
 
-  const raw = await res.text();          // 可能是 SSE，也可能是空体（通知）
-  if (!res.ok && !raw.trim()) die(`HTTP ${res.status}`);
+  const raw = res.text;                  // 可能是 SSE，也可能是空体（通知）
+  if (res.status >= 400 && !raw.trim()) die(`HTTP ${res.status}`);
   if (!raw.trim()) return null;
 
   for (const line of raw.split(/\r?\n/)) {
@@ -144,8 +179,51 @@ function toolText(resp) {
   return content.map((c) => c.text || '').join('');
 }
 
+/**
+ * 工具结果文本 → {isJson, json}。纯函数，便于离线自测。
+ * 工具成功时 text 是一段 JSON 字符串（要再解析一次）；失败时是一句中文
+ * （「请提供搜索关键词」「查询财报异常：… 服务限频」），此时绝不能再当数据用。
+ */
+function parseToolText(text) {
+  try {
+    return { isJson: true, json: JSON.parse(text) };
+  } catch {
+    return { isJson: false, json: null };
+  }
+}
+
+/**
+ * 离线自检：只验证「纯文本返回」这条判定路径，不发任何请求、不读凭据。
+ * 存在的意义：旧版把纯文本 print 出去还 exit 0，`call ... > x.json` 会留下
+ * 一个不是 JSON 的文件，失败被推迟到消费方。这条路径必须有回归测试。
+ */
+function selftest() {
+  const cases = [
+    ['{"ok":true,"data":[]}', true],
+    ['{"ok":false,"message":"服务限频"}', true],
+    ['', false],
+    ['请提供搜索关键词', false],
+    ['查询财报异常：error_type=2 suggest=2 msg=服务限频', false],
+    ['<html>502 Bad Gateway</html>', false],
+  ];
+  let bad = 0;
+  for (const [text, want] of cases) {
+    const got = parseToolText(text).isJson;
+    if (got !== want) {
+      bad += 1;
+      console.log(`  ✗ ${JSON.stringify(text)} → isJson=${got}，应为 ${want}`);
+    }
+  }
+  if (bad) {
+    console.log(`自检失败 ${bad} 项`);
+    process.exit(1);
+  }
+  console.log('自检通过：纯文本返回会被判为非 JSON（call 将以 exit 3 退出）');
+}
+
 async function main() {
   const cmd = process.argv[2] || 'check';
+  if (cmd === 'selftest') { selftest(); return; }
   const { url } = findEndpoint();
   const t = getToken();
   const expired = t.expiresAt && t.expiresAt < Date.now();
@@ -185,19 +263,25 @@ async function main() {
       jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name, arguments: args },
     });
     const text = toolText(r);
-    try {
-      console.log(JSON.stringify(JSON.parse(text), null, 2));   // 美化
-    } catch {
-      console.log(text);
+    const parsed = parseToolText(text);
+    if (!parsed.isJson) {
+      // 工具返回纯文本 = 这次调用没成功（限频 / 参数错 / 工具不存在）。
+      // 必须非零退出：否则 `call ... > x.json` 会留下一个不是 JSON 的文件，
+      // 现场信息（到底是限频还是参数写错）也会丢。
+      console.error('[warn] 工具返回的不是 JSON，很可能是限频 / 参数错 / 工具不存在：');
+      console.error(text.slice(0, 500));
+      console.log(text);                 // 原文仍打到 stdout，方便人工看
+      process.exit(3);
     }
+    console.log(JSON.stringify(parsed.json, null, 2));   // 美化
     return;
   }
 
-  die(`未知命令 ${cmd}；可用：check / tools / call`);
+  die(`未知命令 ${cmd}；可用：check / tools / call / selftest`);
 }
 
 // 作为模块被 require 时只导出能力，不执行 CLI
-module.exports = { findEndpoint, getToken, open, rpc, toolText };
+module.exports = { findEndpoint, getToken, open, rpc, toolText, parseToolText };
 
 if (require.main === module) {
   main().catch((e) => die(e.stack || String(e)));

@@ -1,0 +1,53 @@
+# lint_encoding 的业务词白名单：一行一词，# 之后是注释。
+# 放这里的都是「中文行里合法出现的外文专名」——品牌、产品代号、公司/机构/数据源名、
+# 行业术语。换一家公司只要往这里加词，**不用改代码**。
+#
+# 结构性词汇（JSON 键、工具名、协议词、CSS 属性）不在这里，见 lint_encoding.py 的
+# BUILTIN_ALLOW。不确定时优先用行内豁免 `<!-- lint-allow: 词 -->`，
+# 确认这类词会反复出现再收进本文件。
+
+# 研究机构 / 咨询公司
+frost
+sullivan
+euromonitor
+gfk
+ipsos
+bloomberg
+
+# 大宗商品与行情数据源
+mysteel
+ifind
+cbc
+v2o5
+tio2
+feiti
+
+# 通信 / 物联网 / 智能硬件行业的通用名词
+redcap
+gnss
+tops
+jetson
+thor
+tier
+tier1
+lpwa
+fwa
+cpe
+aec
+sep
+sip
+iot
+cat
+bis
+
+# 日化 / 美妆行业的品牌与实体名
+tommee
+tippee
+mayborn
+sephora
+asia
+jahwa
+
+# 股东姓名拼音（外籍/英文名股东会以纯拼音出现）
+minhong
+mao

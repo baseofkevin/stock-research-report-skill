@@ -39,7 +39,7 @@
 | 12 | `data_risk` | `code` | 质押、解禁、诉讼、ST（仅 A 股） |
 | 13 | `data_notice` | `code`, `limit=20` | 公告（重组/减持/业绩预告） |
 | 14 | `data_news` | `code`, `limit=20` | 个股新闻 |
-| 15 | `data_sector` | `mode=search` → `constituent` | 同业对比 |
+| 15 | `data_sector` | `mode=search` + `query` → `mode=constituent` + `code` | 同业对比（**两步走，见 6.5**） |
 | 16 | `data_score` | `code` | 诊股评分，仅作交叉参考，**不替代自己的判断** |
 
 可选：`data_fund_flow`、`data_technical`、`data_industry_chain`、`data_report`、
@@ -47,8 +47,9 @@
 
 **没有 `data_valuation` 这个工具。** PE/PB 历史分位只能自己搭，见第七节。
 
-**这张表之外还有两件事必须做**：① 第七节的月末采样（同上第 3 行 `data_quote` 加 `date`）；
-② 第三节护城河要的资本支出，见第八节（东财 F10，WeStock 没有这个科目）。
+**这张表之外还有三件事必须做**：① 第七节的月末采样（同上第 3 行 `data_quote` 加 `date`）；
+② 第三节护城河要的资本支出，见第八节（东财 F10，WeStock 没有这个科目）；
+③ 分部表缺主营构成时的跨源补数，见 8b（同样是东财 F10）。
 
 ---
 
@@ -136,12 +137,39 @@ EndDate  InfoPublDate  date  _date
 
 ## 五、数据缺口的处理
 
+### 5.0 先分清「三种返回形态」，处理规则完全不同
+
+`{ ok, data, message }` 只是**成功**时的外壳；实际至少会遇到三种形态，混为一谈就会
+把「参数写错」当成「没数据」、把「空数组」当成「接口坏了」：
+
+| 形态 | 长什么样 | 判据 | 处理 |
+|---|---|---|---|
+| ① 业务失败 | `{"ok":false,"message":"…"}` | `ok === false` | **原样转述 message**，禁止编造；该指标「无数据」 |
+| ② 成功但无数据 | `{"ok":true,"data":{"sz301087":{"top10Shareholders":[]}}}` | `ok === true` 且列表/对象为空 | **不重试**（重试只会烧限频额度）：该指标「无数据」，写 `data_gaps`，打分卡 `value: null` |
+| ③ 不是 JSON | `请提供搜索关键词`、`查询财报异常：… 服务限频` | `JSON.parse` 失败 | 这是**调用失败**（参数错 / 限频 / 工具不存在），不是「那天没数据」；必须非零退出并保留原文 |
+
+形态 ③ 的实测例子（2026-10-30）：`data_sector` 的 `mode=search` **漏传 `query`** 时，
+返回的就是一句 `请提供搜索关键词`；`mode=constituent` 传错参数时返回 `成分股查询需要 code 或 codes`。
+两者都是**参数问题**，正确写法见 6.5。
+
+> 脚本铁律（对应形态 ③）：解析后必须断言 `ok === true`，否则 `exit` 非 0。
+> `westock_client.js` 的 `call` 在工具返回纯文本时以 **exit 3** 退出，并把原文同时写 stderr
+> 和 stdout——不要用 `2>/dev/null` 把唯一的现场信息丢掉。
+
+### 5.1 拿不到数据时的四步
+
 1. **先确认参数用对了**：`data_finance` 必须 `fields="all"`；**默认的 `core` 会让你误以为
    应付账款、存货、合同负债「接口拿不到」**——实测都能拿到。
 2. 再尝试同源替代（`data_consensus` 拿动态 PE、`data_finsearch` 拿附注类信息）。
 3. 仍然没有 → 报告写「暂无披露」，该指标判定置「无数据」，写进 JSON 的 `data_gaps`；
    打分卡该项 `value: null`（**从分母剔除，不记 0 分**）。
 4. **绝对不能用训练记忆或常识补齐具体数字。**
+
+**已确认的「合法空返回」（形态 ②，不要重试）**：
+
+| 工具 | 现象 | 实测 | 处理 |
+|---|---|---|---|
+| `data_shareholder` | 三个列表全空 | `sz301087`（可孚医疗）返回 `shareholderNum: []` / `top10Shareholders: []` / `top10FloatShareholders: []`，`ok: true` | `business.ownership` 留空，`data_gaps` 记一条「股东结构未返回（接口合法空返回）」，不重试 |
 
 ---
 
@@ -182,6 +210,45 @@ EndDate  InfoPublDate  date  _date
 - `data_rating` 可能只有 1 家机构。报告里如实写「机构覆盖极低，缺少外部验证」。
 - 动态 PE 也可用 `pe_fwd` 反推隐含预期净利 = 总市值 ÷ `pe_fwd`，并注明「隐含的假设是…」。
 
+### 6.5 `data_sector`：必须两步走，参数写错只会拿到一句中文
+
+`mode=search` **必须带 `query`**，`mode=constituent` **必须带 `code`**（值是第一步拿到的
+`sectorCode`）。漏参数时返回的是**纯文本**（见 5.0 形态 ③），不是 `ok:false`——
+脚本 `JSON.parse` 会直接抛 `Unexpected token '请'`。
+
+**第一步 · 行业名 → `sectorCode`**：
+
+```bash
+node scripts/westock_client.js call data_sector \
+     '{"code":"sz301087","mode":"search","query":"医疗器械"}'
+```
+
+实测返回（2026-10-30，可孚医疗）：
+
+```json
+{"ok": true, "data": [
+  {"code": "pt02003668", "name": "医疗器械概念", "type": "聚源产业概念清单",
+   "sectorCode": "indus_pt02003668", "listCode": "concept_list_industry"},
+  {"code": "pt01801153", "name": "医疗器械", "type": "申万二级行业清单",
+   "sectorCode": "sw2_pt01801153", "listCode": "industry_list_sw2"}
+]}
+```
+
+**第二步 · `sectorCode` → 成分股**（注意参数名是 `code`，不是 `sectorCode`）：
+
+```bash
+node scripts/westock_client.js call data_sector \
+     '{"mode":"constituent","code":"sw2_pt01801153"}'
+```
+
+实测返回 `data.comp_sw2_pt01801153`，含 `sectorName`（申万二级行业成分股-医疗器械）、
+`sectorType`、`date` 和 `stocks[{code,name}]`；直接拿 `stocks[].code` 批量调
+`data_quote` / `data_finance` 做同业对比。
+
+**两个清单怎么选**：同业对比表优先**申万二级**（`listCode=industry_list_sw2`），口径最接近
+「同类公司」；概念清单（`concept_list_industry`）会把上下游一起圈进来，只适合写正文背景，
+不要拿它算同业中位数。
+
 ---
 
 ## 七、历史估值分位：怎么搭、限频怎么躲
@@ -212,6 +279,18 @@ EndDate  InfoPublDate  date  _date
 **实测校验（301101，2026-10-30）**：月末采样 58 个点算得 PE 分位 13.8%、PB 分位 24.1%；
 用东财 1176 个交易日的日频序列算是 19.3% / 29.3%。**月末采样会平滑掉极端点，差 2~5 个百分点**，
 报告里要注明「月末采样」，不把它当日频精确值；不必为了精度去冒限频的险。
+
+**曲线上「当前值」放哪里（`valuation.series` 末点口径）**：`series` 是月末采样序列，
+**末点用报告日/最新交易日的读数**（同一只股票、同一个 `pe_ratio` 字段）。两种合法写法：
+
+- **替换**（推荐）：如果采样已覆盖报告日所在月，把该月最后一点换成报告日的值，
+  仍是「一个月度点」，不改变采样频率；
+- **追加**：采样只到上个月末时，允许再追加一个报告日的点；此时序列里会多出一个
+  **非月末点**，`valuation.note` 必须写明「月末采样 + 报告日补一点」。
+
+`validate.py` 对此的规则是：`current` 与 `series` 末点相差 > 5% 时——
+**末点日期等于/晚于报告日 → 报错**（同一时点两个数，必有口径错）；
+**末点日期早于报告日 → 只提醒**（月末采样本来就允许末端有缺口，但 `note` 要交代）。
 
 **上市不足 5 年的公司**，分位低可能只是「从上市初期的泡沫里跌下来」，不能当便宜的证明。
 
@@ -248,6 +327,36 @@ https://datacenter.eastmoney.com/securities/api/data/v1/get
 > 以及 ROIC 需要的 EBIT / 有息负债 / 货币资金 / 交易性金融资产，**WeStock 的
 > `fields="all"` 全部覆盖**，不需要第二个源。
 
+### 8b 主营构成：分部表的跨源补数
+
+WeStock 的 `data_finance` 只到利润表科目（营业总收入这一层），**没有「按产品/按地区」的分部
+收入与毛利率**。第三节要算「各业务毛利额占比」，缺这个就只有一句定性。东财 F10 同一个
+接口族里有一张主营构成表，实测可用（2026-10-30，301087）：
+
+```
+https://datacenter.eastmoney.com/securities/api/data/v1/get
+  ?reportName=RPT_F10_FN_MAINOP
+  &columns=SECUCODE,REPORT_DATE,REPORT_NAME,MAINOP_TYPE,ITEM_NAME,
+           MAIN_BUSINESS_INCOME,MBI_RATIO,MAIN_BUSINESS_COST,MAIN_BUSINESS_RPOFIT,
+           MBR_RATIO,GROSS_RPOFIT_RATIO
+  &filter=(SECUCODE%3D%22301087.SZ%22)&pageSize=60
+  &sortColumns=REPORT_DATE&sortTypes=-1&source=HSF10&client=PC
+```
+
+- `MAINOP_TYPE`：**1 = 按产品**、**2 = 按行业**、**3 = 按地区**。同一个 `REPORT_DATE` 下
+  三种都返回，别混着加总（会重复计数）。
+- 金额单位是**元**（`MAIN_BUSINESS_INCOME: 1861906774.13` = 18.62 亿）；
+  `MBI_RATIO` / `MBR_RATIO` / `GROSS_RPOFIT_RATIO` 是**小数**（0.8987 = 89.87%），不是百分数。
+- **字段名有拼写错误，必须照抄**：`MAIN_BUSINESS_RPOFIT`（不是 `PROFIT`）、
+  `GROSS_RPOFIT_RATIO`（不是 `GROSS_PROFIT_RATIO`）。传 `MAIN_BUSINESS_PROFIT` 会被拒：
+  `返回字段不存在`（`code: 9501`）。
+- `MAINOP_TYPE` 为 2 的那组常出现「其他(补充)」，做产品拆分时用 type 1，地区拆分用 type 3。
+- 报告里要注明「分部数据来自东财 F10 主营构成，与 WeStock 报表口径可能不一致
+  （是否含税、是否含其他业务收入）」，并把 `REPORT_NAME`（如「2026中报」）一起写上。
+
+> 只有这两个字段需要跨源：资本支出（8）与主营构成（8b）。其余一律优先 WeStock，
+> 避免同一张表里混三个口径。
+
 ---
 
 ## 九、一句话速查
@@ -263,6 +372,7 @@ data_consensus  → targetPrice + 三年预测（动态 PE）
 data_rating     → 评级    data_dividend → 分红
 data_shareholder→ 股东    data_risk → 质押/解禁/诉讼
 data_notice     → 公告    data_news → 新闻
-data_sector     → 同业    data_score → 诊股（仅参考）
+data_sector     → 同业（search 带 query → constituent 带 code）
+data_score      → 诊股（仅参考）
 data_finsearch  → 文字检索，补商誉/附注类缺口
 ```

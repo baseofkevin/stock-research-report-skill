@@ -96,7 +96,7 @@ def check_section_refs(docs: dict[str, str]) -> None:
 
 # ---------------------------------------------------- 3. 文档里提到的文件都在
 def check_paths(docs: dict[str, str]) -> None:
-    pat = r"`((?:references|scripts|evals)/[A-Za-z0-9_./-]+\.(?:md|py|js|json))`"
+    pat = r"`((?:references|scripts|evals)/[A-Za-z0-9_./-]+\.(?:md|py|js|json|txt))`"
     seen = set()
     for name, text in docs.items():
         for rel in re.findall(pat, text):
@@ -239,12 +239,33 @@ def check_numbers(docs: dict[str, str]) -> None:
         err("SKILL 应写「40~85 个采样点」")
     if "1.6" not in skill_txt:
         err("SKILL 应写采样间隔 ≥1.6 秒")
-    api_txt = docs["references/接入WeStock.md"]
-    if "24~120" in api_txt and "40~85" not in api_txt:
+    acc_txt = docs["references/接入WeStock.md"]
+    if "24~120" in acc_txt and "40~85" not in acc_txt:
         err("接入WeStock.md 仍写 24~120，与 SKILL 的 40~85 不一致")
 
-    # (d) 取数清单：接口文档 §2 表格行数 ↔ SKILL 声称的次数
+    # (c2b) 限频三数：客户端默认间隔 ↔ 两份文档写的「80 次 / 60 秒 / 1.6 秒」
+    client = read("scripts/westock_client.js")
+    m_int = re.search(r"WESTOCK_INTERVAL\s*\|\|\s*(\d+)", client)
+    if not m_int:
+        err("westock_client.js 里找不到 `WESTOCK_INTERVAL || <默认值>`")
+    elif int(m_int.group(1)) != 1600:
+        err(f"westock_client.js 默认间隔 {m_int.group(1)}ms，但文档写的是 1.6 秒（1600ms）")
+    for doc, label in ((docs["references/westock-接口.md"], "westock-接口.md"),
+                       (acc_txt, "接入WeStock.md")):
+        for phrase in ("80 次", "60 秒", "1.6"):
+            if phrase not in doc:
+                warn(f"{label} 没写限频口径「{phrase}」——这是实测数字，别在改采样策略时丢掉")
+
+    # (c2c) 跨源补数：两个外补字段都要有可复制的 URL 模板
     api = docs["references/westock-接口.md"]
+    for name, what in (("CONSTRUCT_LONG_ASSET", "资本支出（护城河 FCF）"),
+                       ("RPT_F10_FN_MAINOP", "主营构成（分部表）")):
+        if name not in api:
+            err(f"westock-接口.md 缺跨源补数字段 {name}（{what}）")
+    if "MAINOP_TYPE" not in api:
+        err("westock-接口.md 写主营构成时必须说明 `MAINOP_TYPE` 的 1/2/3 含义")
+
+    # (d) 取数清单：接口文档 §2 表格行数 ↔ SKILL 声称的次数
     seg2 = api.split("## 二、")[-1].split("## 三、")[0]
     rows_api = [r for r in _table_rows(seg2) if r and re.match(r"\d+", r[0])]
     if len(rows_api) != 16:
@@ -253,7 +274,8 @@ def check_numbers(docs: dict[str, str]) -> None:
     if m and int(m.group(1)) != len(rows_api):
         err(f"SKILL 说「{m.group(1)} 次接口调用」，接口文档表是 {len(rows_api)} 行")
     # SKILL 取数代码块里的工具行数（去重采样行）
-    block = docs["SKILL.md"].split("按 `references/westock-接口.md`")[-1].split("**另有两个补充动作")[0]
+    block = docs["SKILL.md"].split("按 `references/westock-接口.md`")[-1]
+    block = re.split(r"\*\*另有[一二三]个补充动作", block)[0]
     calls = [l for l in block.splitlines() if re.match(r"^\s*(data_|tool_)", l)]
     if calls and len(calls) - 1 != len(rows_api):
         err(f"SKILL 取数块有 {len(calls)} 行工具调用（含 1 行采样），"
@@ -268,12 +290,15 @@ def check_json_keys(docs: dict[str, str]) -> None:
         return
     keys = {
         "meta", "verdict", "price", "core_metrics", "core_summary", "business", "valuation",
-        "financials", "data_gaps", "redflags", "redflags_checked", "scorecard",
-        "conclusion", "sources",
+        "financials", "data_gaps", "redflags", "redflags_checked", "redflags_note",
+        "scorecard", "conclusion", "sources",
     }
     for k in sorted(keys):
         if f'"{k}"' not in renderer:
             err(f"文档承诺的 `{k}` 字段，渲染器里没有引用——写了也不会显示")
+        elif f"`{k}`" not in docs["SKILL.md"]:
+            err(f"渲染器读了 `{k}`，但 SKILL 的 JSON 字段表没登记——"
+                f"写的人不知道该填，等于这个字段不存在")
     if '"moat"' not in renderer:
         err("文档承诺的 `business.moat`，渲染器里没有引用")
 

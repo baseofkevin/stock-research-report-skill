@@ -1,6 +1,6 @@
 ---
 name: stock-research-report
-version: 2.7.0
+version: 2.7.2
 schema_version: "2"
 updated: 2026-10-30
 description: 输入股票代码或名称，从腾讯自选股（WeStock）调取行情、季K线、三大报表、机构预期等数据，按用户私人笔记的解读范式完成企业分析，并输出美化布局的 HTML 企业信息解读报告。触发词：企业信息解读、个股分析、解读一下、股票分析、帮我看看 XXXX、财报解读、研报式个股分析。
@@ -45,6 +45,10 @@ node scripts/westock_client.js call data_finance '{"code":"sz301101","fields":"a
 
 接入原理、凭据位置、协议细节、限频与排查表见 `references/接入WeStock.md`。
 **该文档只写过程，不含任何本机凭据**；换电脑重新在 WorkBuddy 里授权一次即可。
+
+> **`check` 报 `RangeError: WebAssembly.instantiate(): Out of memory`** 说明当前容器/沙箱里
+> undici 的 llhttp WASM 分配失败，**与账号、网络都无关**。v2.7.1 起脚本已改为 `node:https`
+> 直连（不再用全局 `fetch`），先确认拿到的是最新脚本；仍是旧版就更新，不要自己去绕 WASM。
 
 **只做 A 股**（沪 / 深 / 北交所），不覆盖港股、美股。
 代码规范：沪 `sh600519`、深 `sz000001`、北交所 `bj830799`。
@@ -128,12 +132,13 @@ data_sector       → mode=search 后 constituent         （同业对比）
 data_score        → 诊股评分（只作交叉参考，不替代自己的判断）
 ```
 
-**另有两个补充动作，不属于 WeStock 接口，但同样必须做**：
+**另有三个补充动作，不属于 WeStock 接口，但同样必须做**：
 
 | 动作 | 做法 | 为什么必需 |
 |---|---|---|
 | 估值月末采样 | `data_quote(date=YYYY-MM-DD)` 逐月跑 40~85 次（见上面第 8 行） | 第七节的 PE/PB/PS 曲线全靠它，没有它这一节出不来 |
 | 资本支出 | 东财 F10 `RPT_F10_FINANCE_GCASHFLOW.CONSTRUCT_LONG_ASSET`，按年报取 | WeStock 现金流量表无此科目；没有它算不出 FCF，第三节护城河缺一半 |
+| 主营构成 | 东财 F10 `RPT_F10_FN_MAINOP`（`MAINOP_TYPE`：1 产品 / 2 行业 / 3 地区） | WeStock 没有分部收入；没有它第三节的分部表只能定性，算不出各业务毛利额占比 |
 
 **为什么是 16 期（4 年），不是 8 期**：单季倒挤、同季同比、TTM 三件事同时要数据——
 算 2026Q3 单季要 2026 中报；算同季同比要 2025Q3 累计；算 TTM 要 2025 年报。
@@ -159,6 +164,11 @@ data_score        → 诊股评分（只作交叉参考，不替代自己的判�
 **取数纪律**
 - 同一市场、支持 `codes` 的工具只调一次，逗号分隔。
 - `ok:false` 时**原样转述 message，禁止编造**。
+- **`ok:true` 但 `data` 是空数组/空对象 = 合法空返回**（例如 `data_shareholder` 对部分标的
+  三个列表全空）：**不要重试**（只会烧限频额度），该指标判「无数据」、写 `data_gaps`。
+- **返回不是 JSON 时是调用失败，不是「那天没数据」**：`JSON.parse` 失败要立刻停，
+  把原文（限频 / 参数错）报出来。`westock_client.js call` 此时以 exit 3 退出；
+  非 JSON 的典型例子：`data_sector` 漏传 `query` → `请提供搜索关键词`。
 - 接口拿不到的字段，先同源替代（consensus → 动态PE，rating → 反推预测净利），
   再用 `data_report` / `data_news` 的文字口径；**仍没有就写「暂无披露」，判定置为「无数据」**。
   **绝对不能用训练记忆或常识补具体数字。**
@@ -217,6 +227,9 @@ data_score        → 诊股评分（只作交叉参考，不替代自己的判�
 1. **逐条过 §12 排雷清单 25 条**，把命中的写进 `redflags`（**只写命中的**，每条带 `id`=清单编号），
    每条都要给出证据数字（分子分母绝对额 + 阈值对照）；**一条都没命中也要写 `redflags_checked: 25`，
    报告里固定输出「命中 0 / 25 条」。**
+   **零命中时 `redflags_note` 必填**（≥10 字）：说明为什么一条都没中、点名最接近命中的三条
+   （现金流 / 商誉 / 应收），并把「沾边但不够阈值」的观察写在这里——301087 的
+   「OCF −55.2% 却没命中任何一条」就是典型：**清单没命中 ≠ 没有问题**。
 2. **跑 §10 科目变动矩阵**：先用「收入↑↓ × 毛利↑↓」定象限（A/B/C/D），
    再逐行核对现金、应收周转天数、存货周转天数、三费、应付周转天数、长短借款、合同负债
    这七类科目的变动是否"讲得通"。这一步的结果写进 `scorecard.steps` 第 6 步和 `conclusion`。
@@ -268,8 +281,14 @@ S=<skill目录>/scripts
 python3 $S/validate.py       data.json          # ① 结构+算术自检，必须 0 error
 python3 $S/render_report.py  data.json -o 报告.html
 python3 $S/render_md.py      data.json -o 报告.md
-python3 $S/lint_encoding.py  报告.html 报告.md   # ② 产物乱码自检，必须 0 处
+python3 $S/lint_encoding.py  报告.html 报告.md   # ② 产物编码自检，必须 0 error
 ```
+
+**`lint_encoding.py` 的判定分两级**：`[error]` 全小写/怪拼的拉丁串 = 必须改；
+`[warn]` CamelCase / 首字母大写单词 = 大概率是品牌名或产品代号，人工确认即可，不算失败。
+白名单**不用改代码**：公司/行业专名写进 `scripts/allow_words.txt`（一行一词），
+或在该行加 `<!-- lint-allow: SmartVitals -->`、文件顶部加
+`<!-- lint-allow-file: 飞利浦 -->`。
 
 **`validate.py` 兜住的是渲染器的静默降级**：图表值混进字符串 → 图整块消失；
 `state_text` 漏填 → MD 版七步表整列空白；打分卡 `total` 与 `items` 对不上 → 分数造假。
@@ -298,13 +317,14 @@ python3 evals/run.py               # 回归用例 + 上面这一项，一起跑
 | `core_metrics` | [{label, value, note, flag(ok·warn·bad)}]，**v2 至少 10 项** | 二、主要指标初步研判 |
 | `core_summary` | 字符串：二节收尾的一句初步判断（**v2 必填**，≥8 字） | 二、指标卡之后 |
 | `business` | intro / segments[{name,rev_pct,margin,comment}] / moat（**对象，见下行**）/ policy / upstream / downstream | 三、生意本身 |
-| `valuation` | title / lead / metrics[{key(pe·pb·ps), name, unit, current, series[{d,v}], tone?, badge?, note}] / comment / note。**series 是带日期的历史样本（`[{"d":"2021-06-30","v":60.2},…]`，也兼容纯数值数组），渲染器自己算分位、中位、区间并画走势图**；`tone`（ok·mid·high）用来覆盖徽章配色，`badge` 覆盖文案（比如「名义 0% 分位（口径失真）」）。分位 = 低于当前值的样本数 ÷ 有效样本数 | 七、企业估值：三条历史走势曲线 |
+| `valuation` | title / lead / metrics[{key(pe·pb·ps), name, unit, current, series[{d,v}], tone?, badge?, note}] / comment / note。**series 是带日期的历史样本（`[{"d":"2021-06-30","v":60.2},…]`，也兼容纯数值数组），渲染器自己算分位、中位、区间并画走势图**；`tone`（ok·mid·high）用来覆盖徽章配色，`badge` 覆盖文案（比如「名义 0% 分位（口径失真）」）。分位 = 低于当前值的样本数 ÷ 有效样本数。**`series` 末点用报告日/最新交易日的读数**（同日两点相差 >5% 报错；末点日期早于报告日只提醒，但 `note` 要写明月末采样频率） | 七、企业估值：三条历史走势曲线 |
 | `business.moat` | **对象**：text / strength(wide·narrow·none) / strength_text / strength_note / years[] / metrics{rows[{key,name,unit,values[]}], judge, consistency} / charts[{title,labels?,unit_l,unit_r,series}] / roic{value,wacc,spread,note} / sources[{type,strength(strong·mid·weak·none),evidence}] / verdict。**纯字符串仍然兼容，但会告警**（缺表、缺图、缺 ROIC/WACC）。rows 的 key 必须是 fcf / fcf_margin / net_margin / roe / roa 五个 | 护城河：五指标表 + 两张趋势图 + ROIC/WACC + 来源表 |
 | `financials` | **财务全景（合并块，见下表）** | 四、财务全景与跨年趋势研判 |
 | `data_gaps` | [] 字符串列表：拿不到的指标 + 它对哪个判断的影响 | 数据缺口与口径风险 |
 | `redflags` | [{**id**(1~25), level, text, evidence, hit}]，**只列命中项**；零命中时为 `[]` | 五、排雷扫描（分母固定 25） |
 | `redflags_checked` | 整数，v2 固定写 `25`：声明 25 条已逐条过；零命中必须靠它输出「0 / 25」 | 五、排雷扫描标题与正文 |
-| `scorecard` | steps[{no,name,state(pass·warn·fail·na),**state_text**,conclusion}] / items[{dim,value,weight}] / total / total_note。**拿不到数据的项保留 16 行、写 `value: null`（不可评）**，渲染时画灰条、自动从分母剔除并算出归一化得分率 | 六、七步研判 + 评分条 |
+| `redflags_note` | 字符串：**零命中时必填**（≥10 字）——说明为什么一条都没中、点名最接近的三条，并把「沾边但不够阈值」的观察写这里（如「OCF 同比 −55.2%，但扣非健康、应收周转在改善，未命中任何一条」）。有命中项时可选，写了会渲染在命中列表之后 | 五、排雷扫描正文 |
+| `scorecard` | steps[{no,name,state(pass·warn·fail·na),**state_text**,conclusion}] / items[{dim,value,weight}] / total / total_note。**拿不到数据的项保留 16 行、写 `value: null`（不可评）**，渲染时画灰条、自动从分母剔除并算出归一化得分率。`total` 是**展示字符串，不是数字**：格式 `+得分 / 满分 = 得分率%`，实例 `47 / 66（得分率 71.2%）`（`+25 / 66 = 37.9%` 也合法）；数值真源是 `items[].value × weight`，`total` 只是给人看、给校验器对账的**冗余表达**——写成纯数字 `25` 会被 `validate.py` 判「格式无法解析」，括号里得分率与实算差 >0.2pct 也会报错 | 六、七步研判 + 评分条 |
 | `conclusion` | paragraphs[] / watchlist[] / triggers[] | 八、综合研判 + 跟踪清单（编号按实际节数自动生成） |
 | `sources` | [{name, detail}] | 数据来源 |
 | `charts_title` / `redflags_title` / `scorecard_title` / `conclusion_title` | 只覆盖标题文字，不覆盖编号；编号由渲染器按实际存在的节连续生成。`charts_title` 推荐放在 `financials.charts_title`（顶层同名键也兼容） | 各区块标题 |
@@ -373,13 +393,20 @@ python3 evals/run.py               # 回归用例 + 上面这一项，一起跑
 11. 估值只写一个分位 → PE/PB/PS 必须三个都给图、并排读；只报 PE 会被一次性收益骗。
 12. 护城河写成散文 → 没有五指标表、没有两张趋势图、没有 ROIC 减 WACC，等于没论证。
 13. 改了文档不改代码（或反过来）→ 跑 `check_docs.py`。文档里的数字是**硬编码**的：
-    「16 项」「25 条」「满分 66」「§9.4」每改一处都要回头对账，别信记忆。
+    「16 项」「25 条」「满分 66」「§9.4」「1.6 秒 / 80 次 / 60 秒」每改一处都要回头对账，别信记忆。
+14. 零命中只写「0 / 25」不写理由 → `redflags_note` 必填。清单没命中 ≠ 没有问题
+    （301087 的经营现金流 −55.2% 就一条都没中），不写理由读者分不清「查过了」和「没查」。
+15. 为了让 `valuation.current` 通过校验，往 series 里硬塞一个非当月点 → 先看日期：
+    末点比报告日早是**允许**的（只提醒），只有同日两点不一致才是错。塞点会污染分位口径。
 
 ---
 
 ## 变更记录
 
-见 `CHANGELOG.md`。**v2.5.0 起：明确定义「报告骨架（八节）」并把六段式映射过去**——
+见 `CHANGELOG.md`。**v2.7.2 起：取数三态（`ok:false` / `ok:true` 空返回 / 非 JSON）、
+`redflags_note` 正式登记、`valuation.series` 末点改为按日期分级校验、`lint_encoding` 白名单外置
+并分 `error` / `warn` 两级、主营构成跨源模板（`RPT_F10_FN_MAINOP`）。**
+**v2.5.0 起：明确定义「报告骨架（八节）」并把六段式映射过去**——
 三节含护城河四件套（五指标表 + 两图 + ROIC/WACC + 来源表），七节是 PE/PB/PS 三条历史走势曲线。
 v2.4.1 起：估值图从直方图改为时间序列曲线（当前值标在末端）+ 分位百分比（`valuation` 块）。v2.2.0 起：接口文档按 2026-10-30 实测重写（`fields="all"` 的资产负债表字段随公司科目变化：301101 49 / 600315 51 / 600519 53，
 含 `GoodWill`、`LongtermLoan`、`NonCurrentLiabilityIn1Year`、`_Q` 单季字段、`data_quote` 的 `date` 参数、限频阈值）；

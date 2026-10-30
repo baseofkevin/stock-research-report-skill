@@ -1,5 +1,63 @@
 # 变更记录
 
+## v2.7.2 — 2026-10-30（按 301087 实测反馈收口：取数三态、排雷出口、估值末端点）
+
+这一版几乎全是「踩过一次的坑」固化，改法以文档为主、代码只补闸门，**不动 16 项 / 25 条 / 满分 66
+这些结构常量**。
+
+**取数层（静默降级）**
+- `westock_client.js call`：工具返回**非 JSON** 时改为 stderr 报错 + **exit 3**（原文仍打到
+  stdout）。旧版把原文打出去还 exit 0，`call … > x.json` 会留下一个不是 JSON 的文件，
+  失败被推迟到消费方。抽出纯函数 `parseToolText()` 并新增 `selftest` 子命令（离线、不发请求）。
+- `westock-接口.md` 新增 **5.0「三种返回形态」**：`ok:false` / `ok:true` 但空列表 /
+  不是 JSON，三者的处理规则完全不同；并登记已确认的合法空返回（`data_shareholder` 对
+  301087 三个列表全空）。
+- 新增 **6.5 `data_sector` 两步走**：`mode=search` 必须带 `query`（漏了返回纯文本
+  「请提供搜索关键词」），`mode=constituent` 的参数名是 **`code`**（值是 `sectorCode`）——
+  这两点都实测过，附完整请求与返回样例。
+
+**排雷（盲区与出口）**
+- `指标体系.md` §12 #1 改为**组合判据**：保留「净利大增 + 扣非微利 + 现金流恶化」，
+  并入「利润增长 + OCF 同比降 > 30% + 净现比 < 1 且应收/存货周转未恶化」。
+  301087（OCF −55.2%、净现比 0.9，而扣非健康、应收周转 43→37 天）由此从「一条都不中」
+  变成 #1② 命中。**条数仍是 25**，`redflags.id` / 分母 / 渲染器常量全部不动。
+- `redflags_note` 正式登记进 SKILL 的 JSON 字段表：零命中时必填（≥10 字），
+  `validate.py` 对 v2 零命中且空 note 直接报错。渲染器早就读这个字段
+  （`render_report.py` / `render_md.py`），但文档里没写——等于只有写源码的人知道。
+
+**估值（末端点口径）**
+- `validate.py`：`current` 与 `series` 末点的 5% 断言改为**按日期分级**——
+  末点日期早于报告日（月末采样正常现象）只提醒；同日/更晚仍报错。
+  以前一律报错，实际会逼着人往序列里塞一个非月末点，污染分位口径。
+- `SKILL.md` / `解读范式.md` / `westock-接口.md` 补「series 末点怎么取」：
+  采样覆盖当月就**替换**该月最后一点，只到上月末才**追加**，并在 `note` 写明采样频率。
+
+**编码自检（误报治理）**
+- `lint_encoding.py` 改**两级判定**：`[error]` 全小写怪串（必须改）、
+  `[warn]` CamelCase / 首字母大写单词（大概率是品牌名，人工确认即可，不再堵交付）。
+- 业务词白名单外置到 **`scripts/allow_words.txt`**（一行一词），换公司只加数据不改代码；
+  行内豁免 `<!-- lint-allow: SmartVitals -->`、文件级 `<!-- lint-allow-file: … -->`。
+- 修掉两处历史漏报：`CHANGELOG.md` 里的 `undici` / `llhttp` 一直被当乱码（skill 自己的文档
+  从没进过 lint），以及豁免标记本身会被判可疑串。
+
+**文档对账（check_docs.py）**
+- 新增：限频三数（`WESTOCK_INTERVAL` 默认 1600 ↔ 文档的 80 次 / 60 秒 / 1.6 秒）、
+  两个跨源字段的 URL 模板（`CONSTRUCT_LONG_ASSET` + `RPT_F10_FN_MAINOP`）、
+  「渲染器读了但 SKILL 没登记」的 JSON 键（`redflags_note` 就是这么被找出来的）。
+- `westock-接口.md` 新增 **8b 主营构成**：`RPT_F10_FN_MAINOP` 的字段名
+  （`MAIN_BUSINESS_RPOFIT` 是**拼写错误但必须照抄**）、`MAINOP_TYPE` 1/2/3 的含义、
+  金额单位与比率的写法陷阱。
+- `evals/run.py`：把 skill 自身文档的 lint 与 `westock_client.js selftest` 也纳入回归。
+
+## v2.7.1 — 2026-10-30（客户端去掉 undici 依赖，修复沙箱内必崩）
+
+- `scripts/westock_client.js`：新增 `postOnce()`，改用 `node:https` / `node:http` 直连，
+  **不再使用全局 `fetch`**。原实现在容器/沙箱里会抛
+  `RangeError: WebAssembly.instantiate(): Out of memory`（undici 的 llhttp WASM 分配失败），
+  导致 `check` 都跑不过、整个 skill 不可用。`rpc()` 相应改为读 `postOnce()` 返回的 `res.text`。
+- 30 秒静默超时改为 60s 显式超时（`req.setTimeout`），限频与网络异常都能明确报出来。
+- 实测：301087 全流程 16 次接口 + 49 点月末采样，未触发退避。
+
 ## v2.7.0 — 2026-10-30（按全面审计修复：结构闸门、字段事实、结论一致性与双渲染器）
 
 这一版把审计中发现的交付级问题收口，重点不是加功能，而是让「错误的报告出不来」。

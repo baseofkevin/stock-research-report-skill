@@ -16,6 +16,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import date
 from pathlib import Path
 
 LEVELS = {"正常", "健康", "偏弱", "关注", "留意", "警告", "较差", "高危", "危险", "无数据"}
@@ -56,6 +57,26 @@ def _num(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+def _report_date(data: dict) -> str:
+    """报告日（YYYY-MM-DD）：优先 meta.price_at（带时分的行情时点），其次 meta.report_date。"""
+    meta = data.get("meta") or {}
+    for key in ("price_at", "report_date"):
+        m = re.match(r"(\d{4}-\d{2}-\d{2})", str(meta.get(key) or "").strip())
+        if m:
+            return m.group(1)
+    return ""
+
+
+def _day_gap(earlier: str, later: str) -> int | None:
+    """`later - earlier` 的天数；任一侧不是 YYYY-MM-DD 就返回 None（不猜）。"""
+    try:
+        a = [int(x) for x in earlier.split("-")[:3]]
+        b = [int(x) for x in later.split("-")[:3]]
+        return (date(*b) - date(*a)).days
+    except (ValueError, TypeError):
+        return None
+
+
 VAL_KEYS = {"pe", "pb", "ps"}
 
 
@@ -82,18 +103,39 @@ def _check_valuation(data: dict, rep: Report) -> None:
             continue
         good = []          # 兼容 [{d,v}] 与 [v] 两种写法
         last = None
+        last_date = ""
         for item in series:
-            val = item.get("v") if isinstance(item, dict) else item
+            if isinstance(item, dict):
+                val, d = item.get("v"), str(item.get("d") or "").strip()
+            else:
+                val, d = item, ""
             if _num(val) and float(val) > 0:
                 good.append(float(val))
                 last = float(val)
+                if d:
+                    last_date = d
         if len(good) < 20:
             rep.warn(f"估值指标「{name}」只有 {len(good)} 个历史样本（建议 ≥20，否则分位不可信）")
         if not good:
             continue
-        if last is not None and abs(float(cur) - last) / last > 0.05:
-            rep.err(f"估值指标「{name}」current={cur} 与 series 最后一点 {last:g} 相差 "
-                    f"{abs(float(cur) - last) / last * 100:.1f}%——当前值必须对齐曲线末端")
+        # 末端点 vs current：同一时点两个数（日期 ≥ 报告日）必须一致；
+        # 月末采样允许末端缺口，但那时只提醒，并把「note 要写清采样频率」一起抛出来。
+        if last is not None:
+            gap = abs(float(cur) - last) / last
+            asof = _report_date(data)
+            stale = _day_gap(last_date, asof) if (last_date and asof) else None
+            if gap > 0.05:
+                if stale is not None and stale > 0:
+                    rep.warn(
+                        f"估值指标「{name}」current={cur} 与 series 末点 {last:g}（{last_date}）"
+                        f"相差 {gap * 100:.1f}%，末点比报告日 {asof} 早 {stale} 天——"
+                        f"月末采样允许末端有缺口，但 valuation.note 要写清采样频率")
+                else:
+                    rep.err(f"估值指标「{name}」current={cur} 与 series 最后一点 {last:g} 相差 "
+                            f"{gap * 100:.1f}%——同一时点不能两个数，当前值必须对齐曲线末端")
+            elif stale is not None and stale > 45:
+                rep.warn(f"估值指标「{name}」series 末点 {last_date} 比报告日 {asof} 早 "
+                         f"{stale} 天：月末采样可以接受，但 valuation.note 要写明采样频率与样本区间")
         calc = 100 * sum(1 for x in good if x < float(cur)) / len(good)
         declared = m.get("percentile")
         if declared is not None and _num(declared):
@@ -357,6 +399,17 @@ def check(path: Path, rep: Report) -> None:
                 rep.err(f"命中项 level={r.get('level')!r} 不在 {sorted(LEVELS)}")
     if len(ids) != len(set(ids)):
         rep.err("redflags.id 有重复")
+
+    # 零命中时，必须有一段「为什么一条都没中」的说明（redflags_note）。
+    # 否则读者分不清「查过了」和「没查」——301087 那份报告就是靠这段补的。
+    note = str(data.get("redflags_note") or "").strip()
+    if not rf:
+        if len(note) < 10:
+            (rep.err if is_v2 else rep.warn)(
+                "零命中时 redflags_note 必须写：说明为什么一条都没中、"
+                "并点名最接近命中的三条（现金流 / 商誉 / 应收）")
+    elif not note:
+        rep.warn("有命中项但 redflags_note 为空：命中项之外的「沾边未中」观察会丢失")
 
     # ---------- 打分卡 ----------
     sc = data.get("scorecard") or {}

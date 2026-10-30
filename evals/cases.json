@@ -72,6 +72,23 @@
         "price.chart_data",
         "不是数字"
       ]
+    },
+    {
+      "file": "cases/zero-hit-no-note-v2.json",
+      "desc": "零命中但 redflags_note 为空 + 同日末端点与 `current` 数值不一致：两道新闸门都要报错",
+      "expect_valid": false,
+      "expect_error_contains": [
+        "redflags_note",
+        "同一时点"
+      ]
+    },
+    {
+      "file": "cases/stale-endpoint-v2.json",
+      "desc": "估值末端点早于报告日（月末采样正常）：只提醒，不逼人往序列里塞假点",
+      "expect_valid": true,
+      "expect_warn_contains": [
+        "末点比报告日"
+      ]
     }
   ]
 }

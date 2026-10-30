@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -47,6 +48,9 @@ def main() -> int:
         for needle in case.get("expect_error_contains") or []:
             if needle not in out:
                 problems.append(f"校验输出缺少关键信息：{needle!r}")
+        for needle in case.get("expect_warn_contains") or []:
+            if needle not in out:
+                problems.append(f"校验输出缺少关键提醒：{needle!r}")
         if case.get("allow_only_warns") and "[错误]" in out:
             problems.append("v1 用例只应产生警告，不应有错误")
 
@@ -104,6 +108,27 @@ def main() -> int:
             if line.startswith("[错误]"):
                 print(f"        ! {line[len('[错误] '):]}")
         failed += 1
+
+    # ---- 编码自检：skill 自己的文档也要过（以前只扫产物，CHANGELOG 的 undici 一直漏着） ----
+    rc, out, err = run([sys.executable, str(SCRIPTS / "lint_encoding.py"), str(SKILL)])
+    tail = [l for l in (out or "").splitlines() if l.strip()][-1:] or [err[:200]]
+    print(f"[{'PASS' if rc == 0 else 'FAIL'}] 文档编码自检 — {tail[0]}")
+    if rc != 0:
+        for line in out.splitlines():
+            if "[error]" in line:
+                print(f"        ! {line.strip()}")
+        failed += 1
+
+    # ---- 取数层回归：纯文本返回必须被判非 JSON（离线，不需要凭据/网络） ----
+    node = shutil.which("node")
+    if node:
+        rc, out, err = run([node, str(SCRIPTS / "westock_client.js"), "selftest"])
+        last = ((out or err).strip().splitlines() or [""])[-1]
+        print(f"[{'PASS' if rc == 0 else 'FAIL'}] 客户端 selftest — {last}")
+        if rc != 0:
+            failed += 1
+    else:
+        print("[SKIP] 客户端 selftest — 没有 node，跳过（不判失败）")
 
     return 1 if failed else 0
 

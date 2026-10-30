@@ -14,7 +14,7 @@
 |---|---|
 | 本机装了 WorkBuddy，且**在「连接器」里点过「连接腾讯自选股」** | `~/.workbuddy/connectors/*/.credentials.v3.json` 里有 `mcpOAuth` 且 key 以 `westock-mcp` 开头 |
 | 插件缓存里有 westock-mcp 的 `mcp.json` | `~/.workbuddy/plugins/cache/workbuddy-connector-plugins-official/westock-mcp/*/mcp.json` |
-| Node ≥ 18（脚本用内置 `crypto` + `fetch`） | `node -v` |
+| Node ≥ 18（脚本用内置 `crypto` + `node:https` / `node:http`，**不用全局 `fetch`**） | `node -v` |
 
 **OAuth 必须人工点一次**，脚本不负责登录：换机器、换账号、token 过期，都要回
 WorkBuddy 的「连接器」里重新授权。
@@ -112,6 +112,7 @@ node scripts/westock_client.js tools                     # 工具清单
 node scripts/westock_client.js call data_quote '{"code":"sz301101"}'
 node scripts/westock_client.js call data_finance \
      '{"code":"sz301101","fields":"all","num":16}' > /tmp/fin.json
+node scripts/westock_client.js selftest          # 离线自检：不发请求、不读凭据
 ```
 
 脚本做的事：找端点 → 找已授权账号 → 解密 token（只进内存）→ 走 MCP → 输出格式化 JSON。
@@ -128,6 +129,11 @@ node scripts/westock_client.js call data_finance \
 - 需要**退避 ≥ 60 秒**，否则继续失败。
 - **失败返回的不是 JSON**——脚本必须显式断言，否则会把「被限频」当成「那天没有数据」，
   静默产出一份缺数据的报告。`westock_client.js` 在这一步直接报错退出。
+- **取数脚本的铁律**：`JSON.parse` 成功 **且** `ok === true` 才算拿到数据；否则 `exit` 非 0。
+  `westock_client.js call` 在工具返回纯文本时以 **exit 3** 退出，并把原文同时写 stderr 和 stdout——
+  不要用 `2>/dev/null` 把唯一的现场信息丢掉。
+- **两层判定别混**：`ok:true` + 空数组是**合法空返回**（不重试、记 `data_gaps`）；
+  非 JSON 是**调用失败**（报错、别当没数据）。两者的处理规则见 `westock-接口.md` 5.0。
 - 批量采样（例如历史估值分位）**间隔 ≥1.6 秒，建议月末采样 40~85 个点（最多 120）**；
   上市不足 4 年就采上市以来全部月末，满 4 年采最近 48 个月末。不要逐交易日（1200+ 次必然限频，
   对分位精度也没有实质提升）。
@@ -155,5 +161,8 @@ node scripts/westock_client.js call data_finance \
 | `HTTP 401 / missing or malformed Authorization` | token 过期或被吊销 | 重新授权；脚本 `check` 会显示有效期 |
 | `Unsupported state or unable to authenticate data` | AAD/uid 不匹配，或信封格式变了 | 用账号目录名当 userId；仍失败则按第二节重新确认规则 |
 | 返回纯文本「服务限频」 | 调太快 | 退避 60 秒，间隔调到 ≥1.6 秒 |
+| `返回不是 JSON` 但内容是「请提供搜索关键词」「成分股查询需要 code 或 codes」 | 参数写错（不是没数据） | 按 `westock-接口.md` 6.5 补参数；`call` 此时 exit 3 |
 | `返回不是 JSON` 但内容像 HTML | 被网关拦了 | 检查网络/代理；确认 `Accept` 头 |
+| `RangeError: WebAssembly.instantiate(): Out of memory` | 沙箱里 undici 的 llhttp WASM 分配失败（与账号无关） | v2.7.1+ 已改用 `node:https`，确认脚本是最新的；旧版必崩 |
 | 工具名不存在 | 记错名字了 | `tools` 看真实清单 |
+| `call` 输出正常但脚本下游报 JSON 解析错 | 工具返回纯文本、旧版还会 exit 0 | 升级脚本；自查 `node scripts/westock_client.js selftest` |
