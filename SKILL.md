@@ -1,8 +1,8 @@
 ---
 name: stock-research-report
-version: 2.4.1
+version: 2.5.0
 schema_version: "2"
-updated: 2026-10-28
+updated: 2026-10-30
 description: 输入股票代码或名称，从腾讯自选股（WeStock）调取行情、季K线、三大报表、机构预期等数据，按用户私人笔记的解读范式完成企业分析，并输出美化布局的 HTML 企业信息解读报告。触发词：企业信息解读、个股分析、解读一下、股票分析、帮我看看 XXXX、财报解读、研报式个股分析。
 ---
 
@@ -53,6 +53,27 @@ node scripts/westock_client.js call data_finance '{"code":"sz301101","fields":"a
 
 ---
 
+## 报告骨架（八节，顺序不要变）
+
+六段式是**思考路径**，成稿展开为八节。写之前先看这张表，别漏节、别乱序：
+
+| 节 | 标题 | 内容 | 必备图/表 | JSON 键 |
+|---|---|---|---|---|
+| 一 | 股价位置 | 历史区间、当前分位、均线状态 | 季度收盘价走势 | `price` |
+| 二 | 核心指标与估值 | 摘要卡片（≥10 项） | 指标卡网格 | `core_metrics` |
+| 三 | 生意本身 | 卖什么、产业链地位、**护城河** | 分部表 + **五指标表 + 两张趋势图 + ROIC/WACC 卡 + 来源表** | `business` / `business.moat` |
+| 四 | 财务全景与跨年趋势 | 单季 + 同季同比 + TTM 三层口径 | 多张趋势图 + 资产负债明细 | `financials` |
+| 五 | 排雷扫描 | 25 条清单只列命中项 | — | `redflags` |
+| 六 | 七步研判与打分卡 | 七步留痕 + 16 项加权 | 七步表 + 评分条 | `scorecard` |
+| 七 | 企业估值 | **PE/PB/PS 当前在历史曲线上的位置** | **三条走势曲线（横轴时间，末端标当前值）** | `valuation` |
+| 八 | 综合研判与跟踪清单 | 结论 + 触发条件 | — | `conclusion` |
+
+- 三节的护城河、七节的估值图是 **v2.3/v2.4 起的新硬要求**，缺了 `validate.py` 会告警、报告会缺块。
+- 没有 `valuation` 数据时，八节会自动退化成七节（综合研判回到「七」），**不要手写死编号**。
+- 节标题的编号由渲染器按 `has_val` 自动决定，数据里只在需要覆盖时传 `conclusion_title`。
+
+---
+
 ## 第 0 步 · 先确认两件事（30 秒，但决定整篇是否正确）
 
 1. **报告期**：调 `data_disclosure`，它会返回最新定期报告的 `reportEndDate`（报告期）
@@ -79,8 +100,14 @@ data_profile      → 主营业务、行业、股本
 data_disclosure   → 最新定期报告的 reportEndDate + disclosureDate（第 0 步用）
 data_finance      → fields="all", num=16               （三大报表全字段，至少 16 期）
                      ※ fields 不传 = "core"（25 个字段），会缺应付/存货/应收/合同负债的绝对额
-data_quote        → 再按 date=YYYY-MM-DD 循环采样 30~60 次，自建 PE/PB 历史分位
-                     ※ 没有 data_valuation 这个工具；必须间隔 ≥1.5 秒，否则「服务限频」
+data_quote        → 再按 date=YYYY-MM-DD 做**月末采样**（上市满 3 年就采满 4 年，约 40~85 个点），
+                     自建 PE/PB/PS 历史曲线
+                     ※ 没有 data_valuation 这个工具；必须间隔 ≥1.6 秒，约 80 次后触发「服务限频」，
+                       退避 ≥60 秒再续；脚本要断言返回是 JSON，别把限频当成「那天没数据」
+                     ※ PS 需要分母：同一次 `data_finance` 里的 `OperatingRevenueTTM`，
+                       按 `InfoPublDate` 做前视过滤（不用未来的报表算过去的 PS）
+东财 F10          → 资本支出（WeStock 没有这个科目），FCF = 经营现金流 − 资本支出 必需
+                     RPT_F10_FINANCE_GCASHFLOW.CONSTRUCT_LONG_ASSET，按年报取
 data_consensus    → 机构一致预期（动态 PE 的来源）
 data_rating       → 机构评级
 data_dividend     → years=5                            （分红连续性）
@@ -132,10 +159,6 @@ data_score        → 诊股评分（只作交叉参考，不替代自己的判�
   **营运资本占用（应收 + 存货 − 应付）与产业链地位**、在建工程趋势、商誉占净资产比、
   **其他应收款占总资产比**
 - **§8 安全**：资产负债率（**剔合同负债**）、有息负债及其趋势、**毛利额 ÷ 利息费用**
-- **估值分位（第七节）**：PE / PB / PS 三个都要给，各画一张**走势曲线图**
-  （横轴时间、纵轴倍数），当前值标在曲线末端，另画一条中位虚线；**三个分位要一起读**，并把口径说清楚
-  （PE 为负的年份不进样本；一次性收益、商誉减值会污染分母）。
-  PE 被一次性收益垫低时要给出「剔除后 PE」并重算分位——名义便宜≠真便宜。
 - **§9 护城河**：① 五指标按年铺开（**FCF、FCF/营收、净利率、ROE、ROA**，≥5 年）；
   ② 两张趋势图（FCF 柱 + FCF/营收 线；净利率/ROE/ROA 三线）；
   ③ **ROIC 减 WACC**（贴出 Rf / ERP / β 假设，看差值正负与是否收窄）；
@@ -146,7 +169,12 @@ data_score        → 诊股评分（只作交叉参考，不替代自己的判�
   （口径不明，上海家化 2024 年差 16 亿）；WeStock 现金流量表没有这个科目，
   从东财 F10 `RPT_F10_FINANCE_GCASHFLOW.CONSTRUCT_LONG_ASSET` 补，并注明跨源。
 - **§3 估值**：静态/滚动/动态 PE 三者及**梯度解读**、PB、**经营性 PB**（剔理财与商誉）、
-  PEG、股息率、PE/PB 历史分位
+  PEG、股息率
+- **估值分位（第七节，成图）**：PE / PB / PS 三个都要，各画一条**走势曲线**
+  （横轴时间、纵轴倍数，当前值标在曲线末端，加中位虚线），并给出分位百分比。
+  **三个分位要一起读**：全在低位才是全面便宜；只有 PB/PS 低而 PE 高（或反之）说明分母被扭曲了。
+  口径必须交代：PE 为负的年份不进样本；**一次性收益、商誉减值污染分母时，
+  要给出「剔除后 PE」并重算分位**——名义便宜 ≠ 真便宜。
 
 口径规则：
 - 同比要标清楚：**年报对年报，半年报对半年报**；
@@ -193,6 +221,12 @@ data_score        → 诊股评分（只作交叉参考，不替代自己的判�
   拿不到的写「暂无披露」，并进 `data_gaps`。
 - **生意那一段要说出产业链议价地位**（`应收 + 存货` 与 `应付` 谁大）——
   这决定了公司是占用别人的钱做生意，还是自己垫资做生意。
+- **护城河按四步写**（`business.moat` 对象）：结论先行（宽/窄/无 + 一句话）→
+  五指标按年列表（FCF、FCF/营收、净利率、ROE、ROA）→ 两张图（FCF 柱 + FCF/营收 线；
+  净利率/ROE/ROA 三线）→ ROIC 减 WACC（贴参数假设）→ 来源五类逐条给证据，
+  收尾反问「对手拿 10 个亿进来，能不能抢走这门生意」。
+- **企业估值单独成节**（`valuation`）：三张走势曲线，每张图下面写「这张图怎么读」，
+  三个分位并排给结论，并回答「便宜的原因是什么」——市场没发现，还是利润已经塌了。
 - 区分事实与推测：财报数字是事实；机构预测写「隐含的假设是…」；自己的判断写「这么看来…」。
 - 推演句式：「这么看来…」「这也说明…」「后续关键看 xxx，若 A 将 X，若 B 将 Y」。
 - **禁止**套话（未来可期 / 助力腾飞）与编造；**禁止**把主观感慨混进财务分析正文。
@@ -225,16 +259,16 @@ python3 $S/lint_encoding.py  报告.html 报告.md   # ② 产物乱码自检，
 | `verdict` | stance / level(good·mid·bad·watch) / headline / summary / tags[] | 结论卡 |
 | `price` | records[]（历史区间）/ chart_data[{label,value}] / comment | 一、股价位置 + SVG 走势图 |
 | `core_metrics` | [{label, value, note, flag(ok·warn·bad)}]，建议 ≥10 项 | 二、核心指标与估值 |
-| `business` | intro / segments[{name,rev_pct,margin,comment}] / moat / policy / upstream / downstream | 三、生意本身 |
-| `valuation` | title / lead / metrics[{key(pe·pb·ps), name, unit, current, series[{d,v}], tone?, badge?, note}] / comment / note。**series 是带日期的历史样本（`[{"d":"2021-06-30","v":60.2},…]`，也兼容纯数值数组），渲染器自己算分位、中位、区间并画走势图**；`tone`（ok·mid·high）用来覆盖徽章配色，`badge` 覆盖文案（比如「名义 0% 分位（口径失真）」）。分位 = 低于当前值的样本数 ÷ 有效样本数 | 七、企业估值：三张历史分布图 |
+| `business` | intro / segments[{name,rev_pct,margin,comment}] / moat（**对象，见下行**）/ policy / upstream / downstream | 三、生意本身 |
+| `valuation` | title / lead / metrics[{key(pe·pb·ps), name, unit, current, series[{d,v}], tone?, badge?, note}] / comment / note。**series 是带日期的历史样本（`[{"d":"2021-06-30","v":60.2},…]`，也兼容纯数值数组），渲染器自己算分位、中位、区间并画走势图**；`tone`（ok·mid·high）用来覆盖徽章配色，`badge` 覆盖文案（比如「名义 0% 分位（口径失真）」）。分位 = 低于当前值的样本数 ÷ 有效样本数 | 七、企业估值：三条历史走势曲线 |
 | `business.moat` | **对象**：text / strength(wide·narrow·none) / strength_text / strength_note / years[] / metrics{rows[{key,name,unit,values[]}], judge, consistency} / charts[{title,labels?,unit_l,unit_r,series}] / roic{value,wacc,spread,note} / sources[{type,strength(strong·mid·weak·none),evidence}] / verdict。**纯字符串仍然兼容，但会告警**（缺表、缺图、缺 ROIC/WACC）。rows 的 key 必须是 fcf / fcf_margin / net_margin / roe / roa 五个 | 护城河：五指标表 + 两张趋势图 + ROIC/WACC + 来源表 |
 | `financials` | **财务全景（合并块，见下表）** | 四、财务全景与跨年趋势研判 |
 | `data_gaps` | [] 字符串列表：拿不到的指标 + 它对哪个判断的影响 | 数据缺口与口径风险 |
 | `redflags` | [{**id**(1~25), level, text, evidence, hit}]，**只列命中项** | 五、排雷扫描（分母固定 25） |
 | `scorecard` | steps[{no,name,state(pass·warn·fail·na),**state_text**,conclusion}] / items[{dim,value,weight}] / total / total_note。**拿不到数据的项保留 16 行、写 `value: null`（不可评）**，渲染时画灰条、自动从分母剔除并算出归一化得分率 | 六、七步研判 + 评分条 |
-| `conclusion` | paragraphs[] / watchlist[] / triggers[] | 七、综合研判 + 跟踪清单 |
+| `conclusion` | paragraphs[] / watchlist[] / triggers[] | 八、综合研判 + 跟踪清单（无 valuation 时回落为「七」） |
 | `sources` | [{name, detail}] | 数据来源 |
-| `charts_title` / `redflags_title` / `scorecard_title` / `conclusion_title` | 区块标题（含编号），缺省用「②/五/六/七」 | 各区块标题 |
+| `charts_title` / `redflags_title` / `scorecard_title` / `conclusion_title` | 区块标题（含编号）。**缺省编号由渲染器按有无 valuation 自动算**，一般不用传 | 各区块标题 |
 
 **`financials` 子字段**（把旧版的 trends / latest / balance 三块合成一整块）：
 
@@ -297,13 +331,16 @@ python3 $S/lint_encoding.py  报告.html 报告.md   # ② 产物乱码自检，
 8. 拿不到数据的项记 0 分 → 缺数据 ≠ 中性，会把数据不全的公司判成经营变差。
 9. 排雷列表只写命中项却按列表长度做分母 → 显示成「命中 4 / 4 项」，等于自欺。
 10. 渲染完不看图 → 图上值全是字符串时图会整块消失，`validate.py` + 看一眼截图才算完。
+11. 估值只写一个分位 → PE/PB/PS 必须三个都给图、并排读；只报 PE 会被一次性收益骗。
+12. 护城河写成散文 → 没有五指标表、没有两张趋势图、没有 ROIC 减 WACC，等于没论证。
 
 ---
 
 ## 变更记录
 
-见 `CHANGELOG.md`。v2.4.1 起：第七节「企业估值」给 PE/PB/PS 三条历史走势曲线（当前值标在末端）+
-分位百分比（`valuation` 块）。v2.2.0 起：接口文档按 2026-10-28 实测重写（`fields="all"` 能拿到
+见 `CHANGELOG.md`。**v2.5.0 起：明确定义「报告骨架（八节）」并把六段式映射过去**——
+三节含护城河四件套（五指标表 + 两图 + ROIC/WACC + 来源表），七节是 PE/PB/PS 三条历史走势曲线。
+v2.4.1 起：估值图从直方图改为时间序列曲线（当前值标在末端）+ 分位百分比（`valuation` 块）。v2.2.0 起：接口文档按 2026-10-28 实测重写（`fields="all"` 能拿到
 49 个资产负债表字段、`_Q` 单季字段、`data_quote` 的 `date` 参数、限频阈值）；
 `num=16`、`price_at`、`data_gaps`、缺项归一化、结论矩阵、`validate.py`；
 修掉渲染器的轴单位叠字、排雷分母、图表静默跳过、MD 七步表空白、加权总分重复五处缺陷。
