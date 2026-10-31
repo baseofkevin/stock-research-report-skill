@@ -1,8 +1,8 @@
 ---
 name: stock-research-report
-version: 2.11.1
+version: 2.11.2
 schema_version: "2"
-updated: 2026-10-31 16:52
+updated: 2026-10-31 16:57
 description: 输入股票代码或名称，从腾讯自选股（WeStock）调取行情、季K线、三大报表、机构预期等数据，按用户私人笔记的解读范式完成企业分析，输出美化布局的 HTML 企业信息解读报告；远程原始返回与 skill 计算结果合并保存为同名 JSON，三件套路径由 skill 根目录 env 配置。触发词：企业信息解读、个股分析、解读一下、股票分析、帮我看看 XXXX、财报解读、研报式个股分析。
 ---
 
@@ -443,6 +443,17 @@ python3 evals/run.py               # 回归用例 + 上面这一项，一起跑
 
 它专抓「改了 A 处忘了 B 处」：SKILL 说 16 项而表里 18 行、文档引用了不存在的
 `data_xxx`、字段名拼错、`§` 编号指向空章节、骨架声明的 JSON 键渲染器根本没读。
+
+**改「单位 / 枚举」类描述时，先实测再动笔。** 这类错不违反任何结构约束——字段名对、
+数量对、章节号对，`check_docs.py` 也 0 错误——却让整份报告静默算错。2026-10-31 的
+`total_market_cap` 单位（写成「当前是亿元」）与 `MAINOP_TYPE` 的 1/2（写反）就是两次实例。
+现在的规矩是：
+
+1. 把真实返回存进 `evals/fixtures/api-semantics.json`（现含 5 个市值样本、`sz301101` 三组主营构成）；
+2. `python3 evals/run.py` 会跑 `test_api_semantics`：先用 `cap ÷ (单价 × 总股本)` 与
+   `ITEM_NAME` **反推**口径，再要求 `SKILL.md` / `references/westock-接口.md` 写同一个结论；
+3. 文档与返回打架时，改文档——**文档不是基准，返回才是**。这条闸门对「把编号对调回去」
+   和「按亿元解释当前市值」都能抓到（已用变异测试验过）。
 
 **JSON 字段清单**（v2；字段大多可省略，但 v2 的八节必需块缺了会直接报错。
 完整示例见 `scripts/sample.json`，那份示例可直接再渲染；`raw_data` 结构见 `scripts/sample-raw.json`）：

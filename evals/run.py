@@ -276,6 +276,78 @@ def test_concurrency(verbose: bool = False) -> int:
     return 1 if problems else 0
 
 
+def test_api_semantics(verbose: bool = False) -> int:
+    """接口口径的实测回归：总市值单位、MAINOP_TYPE 枚举。
+
+    2026-10-31 这两处文档与接口不符，各造成过一次静默算错。结构校验抓不到，
+    所以这里拿「真实采集包保存下来的基准」（evals/fixtures/api-semantics.json）
+    反推口径，再要求 SKILL 与接口文档写的是同一个结论——**文档不是基准，返回才是**。
+    """
+    problems: list[str] = []
+    fx = json.loads((ROOT / "fixtures" / "api-semantics.json").read_text(encoding="utf-8"))
+
+    # ① total_market_cap：cap ≈ price × shares ⇒ 单位「元」（当前与历史一致）
+    for s in fx["data_quote"]["samples"]:
+        price, shares, cap = s.get("price"), s.get("shares"), s.get("cap")
+        if not (price and shares and cap):
+            problems.append(f"基准样本缺字段：{s}")
+            continue
+        ratio = cap / (price * shares)
+        if not 0.99 <= ratio <= 1.01:
+            problems.append(
+                f"{s['code']} {s['date']} 的 cap/(price×shares) = {ratio:.4g}，"
+                f"不是 1.0——有人按「亿元」解释当前值了？")
+        if verbose:
+            print(f"  · {s['code']} {s['date']}: cap/(price×shares) = {ratio:.4f}")
+
+    # ② MAINOP_TYPE：按 ITEM_NAME 反推语义，再和文档对照
+    GEO = {"国内", "国外", "境内", "境外"}
+    groups = fx["mainop"]["groups"]
+
+    def classify(items):
+        names = [i["name"] for i in items if "其他" not in i["name"]]
+        if names and all(n in GEO for n in names):
+            return "地区"
+        if len(names) == 1 and items[0]["ratio"] >= 0.95:
+            return "行业"
+        if len(names) >= 3:
+            return "产品"
+        return None
+
+    derived = {t: classify(items) for t, items in groups.items()}
+    expect = {"1": "行业", "2": "产品", "3": "地区"}
+    if derived != expect:
+        problems.append(f"MAINOP_TYPE 语义与基准不符：反推 {derived}，预期 {expect}"
+                        f"（基准来自 {fx['mainop']['code']} {fx['mainop']['report']}）")
+
+    # ③ 文档必须和基准同口径
+    texts = {
+        "SKILL.md": (SKILL / "SKILL.md").read_text(encoding="utf-8"),
+        "references/westock-接口.md": (SKILL / "references" / "westock-接口.md").read_text(encoding="utf-8"),
+    }
+    def norm(t: str) -> str:
+        return re.sub(r"[\s`*_]+", "", t)
+
+    for rel, text in texts.items():
+        flat = norm(text)
+        for digit, kind in (("1", "行业"), ("2", "产品"), ("3", "地区")):
+            if not re.search(rf"{digit}(?:是按|是|按|=)?{kind}", flat):
+                problems.append(f"{rel} 没有写「{digit} = {kind}」（与基准反推的枚举不一致）")
+        for digit, kind in (("1", "产品"), ("2", "行业")):
+            if re.search(rf"{digit}(?:是按|是|按|=)?{kind}", flat):
+                problems.append(f"{rel} 仍写着旧口径「{digit} = {kind}」")
+        if "当前值是「亿元」" in text:
+            problems.append(f"{rel} 仍写着旧口径「当前值是「亿元」」")
+        if "/1e8" not in text:
+            problems.append(f"{rel} 没有写「/1e8」的市值换算规则")
+
+    status = "PASS" if not problems else "FAIL"
+    print(f"[{status}] 接口口径基准 — 市值单位（元）+ MAINOP_TYPE（1 行业 / 2 产品 / 3 地区）")
+    for p in problems:
+        print(f"        ! {p}")
+    return 1 if problems else 0
+
+
 def main() -> int:
     verbose = "-v" in sys.argv
     man = json.loads((ROOT / "cases.json").read_text(encoding="utf-8"))
@@ -363,6 +435,9 @@ def main() -> int:
 
     # ---- 采集包并发：锁内读-改-写，两进程同时写不能丢条目 ----
     failed += test_concurrency(verbose)
+
+    # ---- 接口口径基准：市值单位 / MAINOP_TYPE，文档必须与真实返回一致 ----
+    failed += test_api_semantics(verbose)
 
     # ---- 文档交叉引用检查（改文档忘了改代码，是这类 skill 最常见的错） ----
     rc, out, err = run([sys.executable, str(SCRIPTS / "check_docs.py")])

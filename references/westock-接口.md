@@ -438,7 +438,8 @@ https://datacenter.eastmoney.com/securities/api/data/v1/get
 - `MAINOP_TYPE`：**按 `ITEM_NAME` 判，不要只看编号**。实测 `sz301101`（2026 中报）：
   `MAINOP_TYPE=1` 是**按行业**（「专用设备制造业」，收入占比 100%）、
   `=2` 是**按产品**（镜片 / 原料 / 成镜 / 镜架）、`=3` 是**按地区**（国内 / 国外）。
-  这与旧文档「1=产品、2=行业」**正好相反**——同一 `REPORT_DATE` 下三种都返回，
+  这与 v2.11.0 之前的写法**正好相反**（旧版把这两个编号对调了，见 CHANGELOG）——
+  同一 `REPORT_DATE` 下三种都返回，
   做产品拆分先看哪一组的 `ITEM_NAME` 是具体品种名，别按编号硬取，更别把三组混着加总（会重复计数）。
 - 金额单位是**元**（`MAIN_BUSINESS_INCOME: 1861906774.13` = 18.62 亿）；
   `MBI_RATIO` / `MBR_RATIO` / `GROSS_RPOFIT_RATIO` 是**小数**（0.8987 = 89.87%），不是百分数。
