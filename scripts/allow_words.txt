@@ -69,3 +69,7 @@ totalAssets
 
 # 平台名（CHANGELOG 讲跨平台锁时会提到）
 windows
+
+# 一致预期接口字段（本报告 sources 里点名用过）
+forecastInstitutions
+institutionCnt

@@ -285,6 +285,40 @@ def check_numbers(docs: dict[str, str]) -> None:
 
 
 # ---------------------------------------- 7. 文档承诺的 JSON 键，渲染器必须认
+def check_api_semantics(docs: dict[str, str]) -> None:
+    """接口语义对账：单位口径与枚举含义写反过一次，check_docs 却没报错。
+
+    这两类错误不违反任何结构约束（字段名对、数量对、节标题对），却会让报告静默算错，
+    所以单独设一道「语义闸门」：① 禁止 v2.11.0 之前的错误配对；② 接口文档必须写明
+    「按 ITEM_NAME 判」；③ 市值单位不许再出现「当前值是亿元」的说法。
+    """
+    stale = [
+        (r"1\s*产品", "MAINOP_TYPE 1 写成「产品」——实测 1 = 按行业，2 = 按产品"),
+        (r"2\s*行业", "MAINOP_TYPE 2 写成「行业」——实测 1 = 按行业，2 = 按产品"),
+        (r"当前值是[「\"]?亿元", "total_market_cap 当前值不是「亿元」——实测与历史一样都是「元」"),
+    ]
+    for rel, text in docs.items():
+        if rel == "CHANGELOG.md":
+            continue  # 变更日志要引用「改前是什么」，不参与旧口径拦截
+        for pat, msg in stale:
+            m = re.search(pat, text)
+            if m:
+                line = text[:m.start()].count("\n") + 1
+                err(f"{rel}:{line} {msg}（{m.group(0)!r}）")
+
+    api = docs.get("references/westock-接口.md", "")
+    m = re.search(r"MAINOP_TYPE", api)
+    if m:
+        window = api[max(0, m.start() - 600): m.start() + 1200]
+        if "ITEM_NAME" not in window:
+            err("westock-接口.md 讲 MAINOP_TYPE 时必须写「按 ITEM_NAME 判」"
+                "（同行三组都返回，只按编号取会取错组）")
+
+    skill = docs.get("SKILL.md", "")
+    if "total_market_cap" in skill and "/1e8" not in skill:
+        err("SKILL.md 提到 total_market_cap 时必须写「一律 /1e8」（当前值与历史值都是元）")
+
+
 def check_json_keys(docs: dict[str, str]) -> None:
     renderer = read("scripts/render_report.py") + read("scripts/render_md.py")
     if not renderer:
@@ -541,6 +575,7 @@ def main() -> int:
         ("报告骨架", lambda: check_skeleton(docs)),
         ("节标题对账", lambda: check_section_titles(docs)),
         ("输出契约", lambda: check_output_contract(docs)),
+        ("接口语义", lambda: check_api_semantics(docs)),
     ]
     for name, fn in checks:
         before = len(issues)

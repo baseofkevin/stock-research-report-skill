@@ -1,8 +1,8 @@
 ---
 name: stock-research-report
-version: 2.11.0
+version: 2.11.1
 schema_version: "2"
-updated: 2026-10-31 16:10
+updated: 2026-10-31 16:52
 description: 输入股票代码或名称，从腾讯自选股（WeStock）调取行情、季K线、三大报表、机构预期等数据，按用户私人笔记的解读范式完成企业分析，输出美化布局的 HTML 企业信息解读报告；远程原始返回与 skill 计算结果合并保存为同名 JSON，三件套路径由 skill 根目录 env 配置。触发词：企业信息解读、个股分析、解读一下、股票分析、帮我看看 XXXX、财报解读、研报式个股分析。
 ---
 
@@ -166,8 +166,9 @@ data_quote        → 再按 date=YYYY-MM-DD 做**月末采样**（上市不足 
                      自建 PE/PB/PS 历史曲线
                      ※ 没有 data_valuation 这个工具；必须间隔 ≥1.6 秒，约 80 次后触发「服务限频」，
                        退避 ≥60 秒再续；脚本要断言返回是 JSON，别把限频当成「那天没数据」
-                     ※ data_quote 的 total_market_cap：当前值是「亿元」，历史 date 查询返回「元」；
-                       用历史市值算 PS 时必须 /1e8，否则会差 1 亿倍
+                     ※ data_quote 的 total_market_cap：**当前值与历史 date 查询都是「元」**，
+                       一律 /1e8 换成亿元；动手前用同一份返回的 price × total_shares 交叉验一次
+                       （偏差 >10 倍才说明口径变了；历史点的股本要用当时的，不能用今天的反推）
                      ※ PS 需要分母：同一次 `data_finance` 里的 `OperatingRevenueTTM`，
                        按 `InfoPublDate` 做前视过滤（不用未来的报表算过去的 PS）
 data_consensus    → 机构一致预期（动态 PE 的来源）
@@ -211,7 +212,7 @@ python3 scripts/sample_valuation.py --code {code} --raw "$RAW" --start 2021-11-0
 |---|---|---|
 | 估值月末采样 | `data_quote(date=YYYY-MM-DD)` 逐月跑 40~85 次（见上面第 8 行） | 第七节的 PE/PB/PS 曲线全靠它，没有它这一节出不来 |
 | 资本支出 | 东财 F10 `RPT_F10_FINANCE_GCASHFLOW.CONSTRUCT_LONG_ASSET`，按年报取 | WeStock 现金流量表无此科目；没有它算不出 FCF，第三节护城河缺一半 |
-| 主营构成 | 东财 F10 `RPT_F10_FN_MAINOP`（`MAINOP_TYPE`：1 产品 / 2 行业 / 3 地区） | WeStock 没有分部收入；没有它第三节的分部表只能定性，算不出各业务毛利额占比 |
+| 主营构成 | 东财 F10 `RPT_F10_FN_MAINOP`（`MAINOP_TYPE`：**1 行业 / 2 产品 / 3 地区**；实测与旧文档相反，按 `ITEM_NAME` 内容判，别按编号硬取） | WeStock 没有分部收入；没有它第三节的分部表只能定性，算不出各业务毛利额占比 |
 
 **为什么是 16 期（4 年），不是 8 期**：单季倒挤、同季同比、TTM 三件事同时要数据——
 算 2026Q3 单季要 2026 中报；算同季同比要 2025Q3 累计；算 TTM 要 2025 年报。

@@ -230,8 +230,16 @@ EndDate  InfoPublDate  date  _date
 `data_quote(code, date="2024-12-31")` 返回该日的 `pe_ratio` / `pb_ratio` / `pe_lyr` / `pe_fwd`
 / `total_market_cap` 等，与当日行情一致。**这是搭 PE/PB 历史分位的唯一路径**，见第七节。
 
-**单位陷阱**：不带 `date` 的当前报价里 `total_market_cap` 单位是**亿元**（如 67.51）；
-带 `date` 的历史返回单位是**元**（如 8,641,000,000）。用历史市值算 PS 必须先 `/1e8`。
+**单位陷阱（v2.12 修正）**：**当前报价与历史返回的 `total_market_cap` 都是「元」，统一 `/1e8` 换成亿元**。
+实测 2026-10-30 `sz301101` 现价 33.02 元、`total_market_cap = 6,654,000,000`（= 66.54 亿元），
+历史 `date=2021-12-31` 返回 7,305,000,000（= 73.05 亿元），**两处口径一致**。
+旧版本这里写「当前是亿元、历史是元」，会让 `cap / 1e8` 的判断条件失效（6.65e9 既不是 1e2 量级也不是 1e10 量级），
+结果是总市值、PS、以及一切「用市值反算」的指标差 1e8 倍，而分位仍「看起来正常」
+——**静默错，最难查**（PE/PB 分位直接用 `pe_ratio`/`pb_ratio`，不受市值口径影响）。
+
+**取用前必做一次交叉验证**：`total_market_cap ≈ price × total_shares`（同一次返回里取），
+偏差超过 10 倍才说明单位是亿元。注意 `total_shares` 会随转增变化（`sz301101` 2022 年 10 转 5 前是
+134,341,396 股、之后是 201,512,100 股），历史点的市值要用当时的股本，不能用今天的股本反推。
 报告 `meta.market_cap` 也沿用「带单位」这一写法（如「118.20 亿」），`cap_note` 只写股本口径。
 
 **板块陷阱：`market_name` 不能用**。实测 `sz300224.market_name` 返回「深圳主板」，
@@ -427,14 +435,20 @@ https://datacenter.eastmoney.com/securities/api/data/v1/get
   &sortColumns=REPORT_DATE&sortTypes=-1&source=HSF10&client=PC
 ```
 
-- `MAINOP_TYPE`：**1 = 按产品**、**2 = 按行业**、**3 = 按地区**。同一个 `REPORT_DATE` 下
-  三种都返回，别混着加总（会重复计数）。
+- `MAINOP_TYPE`：**按 `ITEM_NAME` 判，不要只看编号**。实测 `sz301101`（2026 中报）：
+  `MAINOP_TYPE=1` 是**按行业**（「专用设备制造业」，收入占比 100%）、
+  `=2` 是**按产品**（镜片 / 原料 / 成镜 / 镜架）、`=3` 是**按地区**（国内 / 国外）。
+  这与旧文档「1=产品、2=行业」**正好相反**——同一 `REPORT_DATE` 下三种都返回，
+  做产品拆分先看哪一组的 `ITEM_NAME` 是具体品种名，别按编号硬取，更别把三组混着加总（会重复计数）。
 - 金额单位是**元**（`MAIN_BUSINESS_INCOME: 1861906774.13` = 18.62 亿）；
   `MBI_RATIO` / `MBR_RATIO` / `GROSS_RPOFIT_RATIO` 是**小数**（0.8987 = 89.87%），不是百分数。
 - **字段名有拼写错误，必须照抄**：`MAIN_BUSINESS_RPOFIT`（不是 `PROFIT`）、
   `GROSS_RPOFIT_RATIO`（不是 `GROSS_PROFIT_RATIO`）。传 `MAIN_BUSINESS_PROFIT` 会被拒：
   `返回字段不存在`（`code: 9501`）。
-- `MAINOP_TYPE` 为 2 的那组常出现「其他(补充)」，做产品拆分时用 type 1，地区拆分用 type 3。
+- 做**产品拆分用 type 2**、行业结构看 **type 1**、地区拆分用 **type 3**；同一 `REPORT_DATE`
+  下三组都有，只取一组加总，别把「行业 100%」当成产品结构（明月镜片 type 1 只有
+  「专用设备制造业 100%」，type 2 才是镜片/原料/成镜/镜架）。type 2 里常混「其他(补充)」，
+  占比小可单列，别并进主产品。
 - 报告里要注明「分部数据来自东财 F10 主营构成，与 WeStock 报表口径可能不一致
   （是否含税、是否含其他业务收入）」，并把 `REPORT_NAME`（如「2026中报」）一起写上。
 
