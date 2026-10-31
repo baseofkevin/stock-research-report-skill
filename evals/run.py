@@ -217,6 +217,65 @@ def test_silent_guards(verbose: bool = False) -> int:
     return 1 if problems else 0
 
 
+def test_concurrency(verbose: bool = False) -> int:
+    """并发写采集包：锁内「重读→追加→写回」之后，一条都不能丢、seq 不能重号。
+
+    2026-10-31 的 P0：采样脚本拿着启动时的旧副本整包写回，把同时 add 的 F10 覆盖掉，
+    终端却已打印「已记录」。这里用两个子进程同时 update 来复现那个场景。
+    """
+    problems: list[str] = []
+    with tempfile.TemporaryDirectory() as td:
+        raw = Path(td) / "并发.json"
+        rc, o, e = run([sys.executable, str(SCRIPTS / "collect_raw.py"),
+                        "init", str(raw), "--code", "sz300224"])
+        if rc != 0:
+            problems.append(f"init 失败 rc={rc} {(o + e)[:200]}")
+        worker = Path(td) / "worker.py"
+        worker.write_text(
+            "import sys, time\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "import raw_bundle\n"
+            "p, tag, n = sys.argv[2], sys.argv[3], int(sys.argv[4])\n"
+            "for i in range(n):\n"
+            "    raw_bundle.update(p, source='westock', tool='data_quote',\n"
+            "                      params={'code': 'sz300224', 'date': f'2026-01-{i%28+1:02d}'},\n"
+            "                      response={'ok': True, 'data': {'sz300224': {'pe_ratio': i}}},\n"
+            "                      note=tag)\n"
+            "    time.sleep(0.002)\n",
+            encoding="utf-8")
+        procs = [
+            subprocess.Popen([sys.executable, str(worker), str(SCRIPTS),
+                              str(raw), tag, "40"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            for tag in ("A", "B")
+        ]
+        for proc in procs:
+            proc.communicate()
+        import json as _json
+        got = _json.loads(raw.read_text(encoding="utf-8"))
+        calls = got.get("calls") or []
+        seqs = [c.get("seq") for c in calls]
+        if len(calls) != 80:
+            problems.append(f"并发写丢了条目：应 80 条，实际 {len(calls)}（锁没生效）")
+        if len(seqs) != len(set(seqs)):
+            problems.append(f"并发写出现重号 seq：{sorted(seqs)[:10]}…")
+        if seqs != list(range(1, len(seqs) + 1)):
+            problems.append("seq 不是从 1 连续编号")
+
+        # 「已记录」必须回读真实条数：连加两条后打印「共 2 条」
+        rc1, o1, _ = run([sys.executable, str(SCRIPTS / "collect_raw.py"), "add", str(raw),
+                          "--tool", "data_kline", "--params", "{}",
+                          "--response", '{"ok": true, "data": []}'])
+        if "包内共 81 条" not in o1:
+            problems.append(f"collect_raw add 没打印回读后的总条数：{o1.strip()[:120]}")
+        if verbose:
+            print(f"  · 并发实测：{len(calls)} 条 / 唯一 seq {len(set(seqs))} / 回读打印正常")
+    status = "PASS" if not problems else "FAIL"
+    print(f"[{status}] 采集包并发防护 — 两进程同时写 80 条，零丢失、seq 连续")
+    for p in problems:
+        print(f"        ! {p}")
+    return 1 if problems else 0
+
+
 def main() -> int:
     verbose = "-v" in sys.argv
     man = json.loads((ROOT / "cases.json").read_text(encoding="utf-8"))
@@ -253,6 +312,15 @@ def main() -> int:
                 problems.append(f"MD 渲染失败 rc={rc2} {e2[:200]}")
             body_md = md.read_text(encoding="utf-8") if md.exists() else ""
             body_html = html.read_text(encoding="utf-8") if html.exists() else ""
+            for needle in case.get("html_contains") or []:
+                if needle not in body_html:
+                    problems.append(f"HTML 缺少关键串 {needle!r}")
+            for needle in case.get("html_not_contains") or []:
+                if needle in body_html:
+                    problems.append(f"HTML 不该出现 {needle!r}（渲染器没处理这种输入）")
+            for needle in case.get("md_not_contains") or []:
+                if needle in body_md:
+                    problems.append(f"MD 不该出现 {needle!r}")
             for needle in case.get("must_contain") or []:
                 if needle not in body_md or needle not in body_html:
                     where = []
@@ -292,6 +360,9 @@ def main() -> int:
 
     # ---- 静默降级防护：judge / 表头错列 / records / 补充说明 / 采集包守卫 ----
     failed += test_silent_guards(verbose)
+
+    # ---- 采集包并发：锁内读-改-写，两进程同时写不能丢条目 ----
+    failed += test_concurrency(verbose)
 
     # ---- 文档交叉引用检查（改文档忘了改代码，是这类 skill 最常见的错） ----
     rc, out, err = run([sys.executable, str(SCRIPTS / "check_docs.py")])

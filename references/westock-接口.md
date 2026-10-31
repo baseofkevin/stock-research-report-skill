@@ -33,7 +33,7 @@
 | 6 | `data_profile` | `code` | 主营、行业、股本、上市日期（**不含估值**，别指望它给 PE/PB） |
 | 7 | `data_finance` | `code`, `fields="all"`, `num=16`（护城河另补 `num=28`） | **三大报表全字段**，见第三节 |
 | 8 | `data_consensus` | `code` | `targetPrice` + 未来三年 `netProfit`/`eps`/`pe`（动态 PE 的来源） |
-| 9 | `data_rating` | `code` | 机构评级 |
+| 9 | `data_rating` | `code` | 机构评级；返回 `forecastInstitutions` / `ratingBuyCnt` / `ratingCnt`，**可能只有条数、没有评级与目标价**（见 §6.4） |
 | 10 | `data_dividend` | `code` | 分红送转序列 |
 | 11 | `data_shareholder` | `code` | 股东结构、大股东性质 |
 | 12 | `data_risk` | `code` | 质押、解禁、诉讼、ST（仅 A 股） |
@@ -232,6 +232,18 @@ EndDate  InfoPublDate  date  _date
 
 **单位陷阱**：不带 `date` 的当前报价里 `total_market_cap` 单位是**亿元**（如 67.51）；
 带 `date` 的历史返回单位是**元**（如 8,641,000,000）。用历史市值算 PS 必须先 `/1e8`。
+报告 `meta.market_cap` 也沿用「带单位」这一写法（如「118.20 亿」），`cap_note` 只写股本口径。
+
+**板块陷阱：`market_name` 不能用**。实测 `sz300224.market_name` 返回「深圳主板」，
+但 300 段是创业板——任何用这个字段生成的文案都会写错板块。板块一律按代码前缀判：
+
+| 前缀 | 板块 |
+|---|---|
+| `sh688` | 科创板 |
+| `sh60` | 沪市主板 |
+| `sz300` / `sz301` | 创业板 |
+| `sz00` | 深市主板 |
+| `bj8` / `bj4` | 北交所 |
 
 ### 6.2b `data_consensus` 的单位
 
@@ -252,6 +264,14 @@ EndDate  InfoPublDate  date  _date
 
 - `data_consensus` 可能返回 `institutionCnt: 0`（有预测但没统计到机构数）——不是报错。
 - `data_rating` 可能只有 1 家机构。报告里如实写「机构覆盖极低，缺少外部验证」。
+- **`ratingCnt` 是「评级记录条数」，不是覆盖机构数**；它和 `forecastInstitutions`、
+  `data_consensus.institutionCnt` 会互相矛盾。实测 `sz300224`（正海磁材，2026-10-30）：
+  `{"forecastInstitutions": 1, "ratingBuyCnt": 1, "ratingCnt": 1}`，**没有评级、目标价和机构名**，
+  而同一天 `data_consensus` 给了 3 个年度预测、`institutionCnt: 0`。三处口径打架时，
+  按「最乐观的覆盖数」记录，并在 `data_gaps` 写明分歧。
+- **硬规则：覆盖机构 < 3 家时，PEG 只能作参考，不得单独作为估值档位（§13 第 3 轴）的主依据**，
+  改用经营口径 PB 分位定档，并在 `conclusion` 写「预测来自 N 家机构，PEG 仅作参考」。
+  `SKILL.md` 的「rating → 反推预测净利」在这种情况下反推不出来，不要硬凑。
 - 动态 PE 也可用 `pe_fwd` 反推隐含预期净利 = 总市值 ÷ `pe_fwd`，并注明「隐含的假设是…」。
 
 ### 6.5 `data_sector`：必须两步走，参数写错只会拿到一句中文

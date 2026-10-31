@@ -27,12 +27,20 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+try:                      # POSIX
+    import fcntl
+except ImportError:       # Windows
+    fcntl = None
+    import msvcrt
 
 SCHEMA = "raw-v1"
 VALID_SOURCES = {"westock", "eastmoney", "web", "file", "manual"}
@@ -49,6 +57,8 @@ def atomic_write_text(path: Path, text: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())        # 断电也不留半截文件
         os.chmod(tmp_name, 0o644)
         os.replace(tmp_name, path)
     finally:
@@ -85,6 +95,71 @@ def save(bundle: dict, path: str | Path) -> Path:
     bundle.setdefault("calls", [])
     atomic_write_text(p, json.dumps(bundle, ensure_ascii=False, indent=2) + "\n")
     return p
+
+
+@contextlib.contextmanager
+def locked(path: str | Path, timeout: float = 60.0):
+    """采集包的跨进程互斥锁（`<包>.lock`）。
+
+    为什么需要：`sample_valuation` 采样期间，人用 `collect_raw add` 补一条，
+    两边都是「读整包 → 改 → 写整包」，后写的会把先写的覆盖掉，而且不报错
+    （2026-10-31 复盘 P0：终端说「已记录 #56」，文件里没有）。
+    `atomic_write_text` 只保证不写坏文件，不解决这个 lost update。
+    """
+    p = Path(path).expanduser()
+    lock_path = Path(str(p) + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a+", encoding="utf-8") as fh:
+        deadline = time.time() + timeout
+        while True:
+            try:
+                if fcntl is not None:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                else:                          # Windows：锁第 1 个字节
+                    fh.seek(0)
+                    if fh.read(1) == "":
+                        fh.write("\0")
+                        fh.flush()
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except (BlockingIOError, OSError):
+                if time.time() > deadline:
+                    raise TimeoutError(
+                        f"等采集包锁超过 {timeout:g}s：{lock_path} 仍被另一个进程占用"
+                        f"（采样脚本还在跑？等它结束再 add）")
+                time.sleep(0.2)
+        try:
+            yield
+        finally:
+            try:
+                if fcntl is not None:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                else:
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+
+
+def update(path: str | Path, _extra: dict | None = None, **kwargs) -> dict:
+    """锁内「重读 → 追加 → 写回 → 回读校验」，返回写完后的整包。
+
+    所有写采集包的入口都必须走这里：调用方不能拿着启动时读的旧副本整包写回。
+    `_extra` 是追加到这条 call 上的附加标记（如 `{"no_data": true}`），
+    也必须在锁内写入——否则又变成一次锁外的整包写回。
+    """
+    p = Path(path).expanduser()
+    with locked(p):
+        bundle = load(p)
+        call = append(bundle, **kwargs)
+        if _extra:
+            call.update(_extra)
+        save(bundle, p)
+        after = load(p)
+    if not any(c.get("tool") == call.get("tool") and c.get("at") == call.get("at")
+               and c.get("seq") == call["seq"] for c in (after.get("calls") or [])):
+        raise RuntimeError(f"写入后回读不到 #{call['seq']} {call.get('tool')}：{p}")
+    return after
 
 
 def _looks_like_tool_response(obj: Any) -> bool:
@@ -131,9 +206,11 @@ def add_call(bundle: dict, call: dict) -> dict:
 
 
 def append(bundle: dict, **kwargs) -> dict:
-    """记录一条调用；seq 按包内顺序自动编号。"""
+    """记录一条调用；seq = 已有最大序号 + 1（包内顺序编号，重号会被后面重编）。"""
     call = make_call(**kwargs)
-    call["seq"] = len(bundle.setdefault("calls", [])) + 1
+    calls = bundle.setdefault("calls", [])
+    seqs = [c.get("seq") for c in calls if isinstance(c.get("seq"), int)]
+    call["seq"] = (max(seqs) + 1) if seqs else len(calls) + 1
     return add_call(bundle, call)
 
 
@@ -193,6 +270,10 @@ def make_raw_data(data: dict, calls: list[dict]) -> dict:
     if isinstance(existing, dict):
         merged.extend(existing.get("calls") or [])
     merged.extend(calls)
+    seqs = [c.get("seq") for c in merged if isinstance(c.get("seq"), int)]
+    if len(seqs) != len(set(seqs)):            # 采集包被并发写坏过：重编，别交出重号证据
+        for i, call in enumerate(merged, 1):
+            call["seq"] = i
     for i, call in enumerate(merged, 1):
         call.setdefault("seq", i)
     tools = sorted({str(c.get("tool")) for c in merged if c.get("tool")})

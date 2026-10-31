@@ -1,8 +1,8 @@
 ---
 name: stock-research-report
-version: 2.10.0
+version: 2.11.0
 schema_version: "2"
-updated: 2026-10-31 15:30
+updated: 2026-10-31 16:10
 description: 输入股票代码或名称，从腾讯自选股（WeStock）调取行情、季K线、三大报表、机构预期等数据，按用户私人笔记的解读范式完成企业分析，输出美化布局的 HTML 企业信息解读报告；远程原始返回与 skill 计算结果合并保存为同名 JSON，三件套路径由 skill 根目录 env 配置。触发词：企业信息解读、个股分析、解读一下、股票分析、帮我看看 XXXX、财报解读、研报式个股分析。
 ---
 
@@ -201,6 +201,10 @@ python3 scripts/sample_valuation.py --code {code} --raw "$RAW" --start 2021-11-0
 脚本只补采集包里缺的月份；空返回自动回退前一个交易日，超时/限频分开退避，
 每成功一次立即落盘。**采集包必须先 `init`**；`collect_raw.py run/add` 默认不再静默新建。
 
+**采样脚本运行期间不要用 `collect_raw add/run` 写同一个采集包。** 现在两边都走
+`raw_bundle.locked()` + 锁内「重读 → 追加 → 写回 → 回读」，「已记录」也不再是空话；
+但并发写只会让你排在锁上等，串行做更省事（这也是 v2.10.1 之前那次丢数据的直接原因）。
+
 **另有三个补充动作，不属于 WeStock 接口，但同样必须做**：
 
 | 动作 | 做法 | 为什么必需 |
@@ -246,6 +250,8 @@ python3 scripts/sample_valuation.py --code {code} --raw "$RAW" --start 2021-11-0
     写 `data_gaps`，不要当成参数写错。
   `westock_client.js call` 对纯文本统一 exit 3，所以要看原文语义再分类。
 - 接口拿不到的字段，先同源替代（consensus → 动态PE，rating → 反推预测净利），
+  **覆盖机构 < 3 家时 PEG 只能作参考、不得单独作为估值档位的主依据**；
+  `data_rating.ratingCnt` 是**评级记录条数**，不是覆盖机构数（两者会打架，见接口文档 §6.4）。
   再用 `data_report` / `data_news` 的文字口径；**仍没有就写「暂无披露」，判定置为「无数据」**。
   **绝对不能用训练记忆或常识补具体数字。**
 - **把每一条原始返回都收进同一个采集包**，最后由 `save_report.py` 并入交付 JSON 的
@@ -307,13 +313,15 @@ python3 scripts/collect_raw.py status "$RAW"
   不能用投资活动现金流净额（后者含买理财，会算出巨额负数），**更不能用接口的 FCFE/FCFF**
   （口径不明，上海家化 2024 年差 16 亿）；WeStock 现金流量表没有这个科目，
   从东财 F10 `RPT_F10_FINANCE_GCASHFLOW.CONSTRUCT_LONG_ASSET` 补，并注明跨源。
-- **§3 估值**：静态/滚动/动态 PE 三者及**梯度解读**、PB、**经营性 PB**（剔理财与商誉）、
+- **§3 估值**：静态/滚动/动态 PE 三者及**梯度解读**、PB、**经营性 PB**（剔理财与商誉；理财口径见 §7.1：交易性金融资产 + 其他流动资产中的理财 + 一年内到期大额存单，**不含货币资金**）、
   PEG、股息率
 - **估值分位（第七节，成图）**：PE / PB / PS 三个都要，各画一条**走势曲线**
   （横轴时间、纵轴倍数，当前值标在曲线末端，加中位虚线），并给出分位百分比。
   **三个分位要一起读**：全在低位才是全面便宜；只有 PB/PS 低而 PE 高（或反之）说明分母被扭曲了。
-  口径必须交代：PE 为负的年份不进样本；**一次性收益、商誉减值污染分母时，
-  要给出「剔除后 PE」并重算分位**——名义便宜 ≠ 真便宜。
+  口径必须交代（统一见 `references/指标体系.md` §3.5 的「分位口径表」）：PE 为负的年份不进样本；
+  **一次性收益、商誉减值污染分母时要给出「剔除后 PE」并重算分位**；**样本含极端值
+  （>100 倍或 >3 倍中位）时必须另给缩尾分位 `percentile_trimmed`**，并在 `note` 写明
+  「样本内最高 X 倍、出现在何时、为什么」——名义便宜 ≠ 真便宜。
 
 口径规则：
 - 同比要标清楚：**年报对年报，半年报对半年报**；
@@ -441,21 +449,21 @@ python3 evals/run.py               # 回归用例 + 上面这一项，一起跑
 | 键 | 内容 | 对应报告区块 |
 |---|---|---|
 | `schema_version` | 固定 `"2"`。v1（trends/latest/balance 三块）仍能渲染，但会丢掉整个「财务全景」 | — |
-| `meta` | name / code / tagline / price / **price_at** / change_pct / chg_note / market_cap / **cap_note** / industry / report_date。`report_date` 是**行情/报告基准日**（不是财报报告期），`cap_note` 写市值单位与股本口径（如「亿元　总股本 92.91 亿股」） | 顶部横幅 + 页脚时点 |
+| `meta` | name / code / tagline / price / **price_at** / change_pct / chg_note / market_cap / **cap_note** / industry / report_date。`report_date` 是**行情/报告基准日**（不是财报报告期）。**市值的单位只写一次**：`market_cap` 自带单位（如「118.20 亿」），`cap_note` 只写股本与每股口径（如「总股本 9.31 亿股（流通 9.27 亿股）」）；两处都写「亿元」会渲染成「118.20 亿　亿元」，`validate.py` 会把重复单位判为错误 | 顶部横幅 + 页脚时点 |
 | `verdict` | stance / level(good·mid·bad·watch) / headline / summary / tags[] | 结论卡 |
 | `price` | `records[{name, range, note}]`（历史区间表，**不是 label/value**）/ `chart_data[{label,value}]` / `chart_title` / `comment` | 一、股价位置 + SVG 走势图 |
 | `core_metrics` | [{label, value, note, flag(ok·warn·bad)}]，**v2 至少 10 项** | 二、主要指标初步研判 |
 | `core_summary` | 字符串：二节收尾的一句初步判断（**v2 必填**，≥8 字） | 二、指标卡之后 |
 | `business` | intro / segments[{name,rev_pct,margin,comment}] / moat（**对象，见下行**）/ policy / upstream / downstream | 三、生意本身 |
-| `valuation` | title / lead / metrics[{key(pe·pb·ps), name, unit, current, series[{d,v}], tone?, badge?, note}] / comment / note。**series 是带日期的历史样本（`[{"d":"2021-06-30","v":60.2},…]`，也兼容纯数值数组），渲染器自己算分位、中位、区间并画走势图**；`tone`（ok·mid·high）用来覆盖徽章配色，`badge` 覆盖文案（比如「名义 0% 分位（口径失真）」）。分位 = 低于当前值的样本数 ÷ 有效样本数。**`series` 末点用报告日/最新交易日的读数**（同日两点相差 >5% 报错；末点日期早于报告日只提醒，但 `note` 要写明月末采样频率） | 七、企业估值：三条历史走势曲线 |
+| `valuation` | title / lead / metrics[{key(pe·pb·ps), name, unit, current, series[{d,v}], tone?, badge?, note}] / comment / note。**series 是带日期的历史样本（`[{"d":"2021-06-30","v":60.2},…]`，也兼容纯数值数组），渲染器自己算分位、中位、区间并画走势图**；`tone`（ok·mid·high）用来覆盖徽章配色，`badge` 覆盖文案（比如「名义 0% 分位（口径失真）」）。分位 = 低于当前值的样本数 ÷ 有效样本数（校验器与渲染器共用 `scripts/report_stats.py`，不再各算一遍）。**`percentile_trimmed`（剔除极端点后的分位：`v > min(100, 3×中位)` 的点不进样本，无极端点时退回两端各 5% 缩尾）在样本里有极端点时必填**：利润塌陷期的 100 倍以上 PE 会把分位压平，两个口径相差 ≥10pct 时渲染器并排显示，区间外的点画成空心圈；出现极端样本却没给缩尾口径，`validate.py` 会告警。**`series` 末点用报告日/最新交易日的读数**（同日两点相差 >5% 报错；末点日期早于报告日只提醒，但 `note` 要写明月末采样频率） | 七、企业估值：三条历史走势曲线 |
 | `business.moat` | **对象**：text / strength(wide·narrow·none) / strength_text / strength_note / years[] / metrics{rows[{key,name,unit,values[]}], judge, consistency} / charts[{title,labels?,unit_l,unit_r,series}] / roic{value,wacc,spread,note} / sources[{type,strength(strong·mid·weak·none),evidence}] / verdict。**纯字符串仍然兼容，但会告警**（缺表、缺图、缺 ROIC/WACC）。rows 的 key 必须是 fcf / fcf_margin / net_margin / roe / roa 五个 | 护城河：五指标表 + 两张趋势图 + ROIC/WACC + 来源表 |
 | `financials` | **财务全景（合并块，见下表）** | 四、财务全景与跨年趋势研判 |
 | `data_gaps` | [] 字符串列表：拿不到的指标 + 它对哪个判断的影响 | 数据缺口与口径风险 |
 | `redflags` | [{**id**(1~25), level, text, evidence, hit}]，**只列命中项**；零命中时为 `[]` | 五、排雷扫描（分母固定 25） |
 | `redflags_checked` | 整数，v2 固定写 `25`：声明 25 条已逐条过；零命中必须靠它输出「0 / 25」 | 五、排雷扫描标题与正文 |
 | `redflags_note` | 字符串：**零命中时必填**（≥10 字）——说明为什么一条都没中、点名最接近的三条，并把「沾边但不够阈值」的观察写这里（如「OCF 同比 −55.2%，但扣非健康、应收周转在改善，未命中任何一条」）。有命中项时可选，写了会渲染在命中列表之后 | 五、排雷扫描正文 |
-| `scorecard` | steps[{no,name,state(pass·warn·fail·na),**state_text**,conclusion}] / items[{dim,value,weight}] / total / total_note。**拿不到数据的项保留 16 行、写 `value: null`（不可评）**，渲染时画灰条、自动从分母剔除并算出归一化得分率。`total` 是**展示字符串，不是数字**：格式 `+得分 / 满分 = 得分率%`，实例 `47 / 66（得分率 71.2%）`（`+25 / 66 = 37.9%` 也合法）；数值真源是 `items[].value × weight`，`total` 只是给人看、给校验器对账的**冗余表达**——写成纯数字 `25` 会被 `validate.py` 判「格式无法解析」，括号里得分率与实算差 >0.2pct 也会报错 | 六、七步研判 + 评分条 |
-| `conclusion` | paragraphs[] / watchlist[] / triggers[] | 八、综合研判 + 跟踪清单（编号按实际节数自动生成） |
+| `scorecard` | steps[{no,name,state(pass·warn·fail·na),**state_text**,conclusion}] / items[{dim,value,weight}] / total / total_note。**拿不到数据的项保留 16 行、写 `value: null`（不可评）**，渲染时画灰条、自动从分母剔除并算出归一化得分率。`total` 是**展示字符串，不是数字**：格式 `+得分 / 满分 = 得分率%`，实例 `47 / 66（得分率 71.2%）`（`+25 / 66 = 37.9%` 也合法）；数值真源是 `items[].value × weight`，`total` 只是给人看、给校验器对账的**冗余表达**——写成纯数字 `25` 会被 `validate.py` 判「格式无法解析」，括号里得分率与实算差 >0.2pct 也会报错。**`total_note` 必须点明「本卡只评质地不评成长；成长见第八节」**——16 项里没有成长维度（§5 整章未进卡），不说明会让强周期/强改善型公司被静默判低 | 六、七步研判 + 评分条 |
+| `conclusion` | paragraphs[] / watchlist[] / triggers[]，**三者都是字符串数组**；watchlist/triggers 每项写成「指标：阈值 → 含义（频率）」，**不要写成 `{item,threshold,freq}` 这类对象**（渲染器会打印 Python 字面量，`validate.py` 直接报错） | 八、综合研判 + 跟踪清单（编号按实际节数自动生成） |
 | `sources` | [{name, detail}] | 数据来源 |
 | `raw_data` | 远程原始返回包：`schema`(raw-v1) / `code` / `generated_at` / `call_count` / `calls[{source,tool,params,at,ok,response|raw_text}]`。由 `collect_raw.py` 采集、`save_report.py` 合并；**交付 JSON 必须有**，渲染器不读 | 不单独渲染（数据可复算凭证） |
 | `_data_package` | 合并说明：`saved_at` / `basename` / `output_dir` / `raw_data` 键名。由 `save_report.py` 自动写 | 不渲染 |
@@ -555,14 +563,23 @@ REPORT_BASENAME_TEMPLATE={name}-企业信息解读-{date}
     三件套必须**同目录、同主名、只差后缀**。
 19. 已研究过的公司又跑完整 16 类接口 → 先 `report_cache.py lookup`；`cached: true` 就加
     `save_report.py --reuse`，只更新三件套，别重拉 40~85 次月末采样。
-20. 已研究过却新建到别的目录、或另起一个主名 → 缓存按 `meta.code` 能识别日期不同的旧文件，
+20. 采样脚本还在跑就用 `collect_raw add/run` 写同一个采集包 → 走锁排队，别并发；
+    终端说「已记录」时要看「包内共 N 条」，那是回读后的真实条数。
+21. 估值样本里有 300 倍 PE 却只报一个分位 → 必须同时给 `percentile_trimmed`，
+    并在 `note` 点名极端点；只给全样本分位会让「偏贵」被算成「偏便宜」（正海 47.9% vs 62.2%）。
+22. 已研究过却新建到别的目录、或另起一个主名 → 缓存按 `meta.code` 能识别日期不同的旧文件，
     但交付目录要保持 `env` 的那一个，避免同一公司散成多份。
 
 ---
 
 ## 变更记录
 
-见 `CHANGELOG.md`。**v2.9.0 起（v2.10.0 继续沿用）：先查 `env` 输出目录的旧报告——已研究过的公司用
+见 `CHANGELOG.md`。**v2.11.0 起：① 采集包写入统一走 `raw_bundle.locked()/update()`
+（锁内重读-追加-回写-回读），采样期间并发 add 不再丢条目；② 轻量标记（`**粗体**` / 反引号）
+并入 `esc()` 一次处理，正文/证据/清单不再漏；③ 估值分位双口径（`percentile` + 剔除极端点后的
+`percentile_trimmed`，校验器与渲染器共用 `report_stats.py`）；④ `watchlist/triggers`
+元素必须是字符串、市值单位不许写两遍，校验器直接报错。**
+**v2.9.0 起（v2.10.0 继续沿用）：先查 `env` 输出目录的旧报告——已研究过的公司用
 `save_report.py --reuse` 只更新三件套（复用旧 `raw_data`），没研究过的公司才完整取数；
 `report_cache.py` 按 `meta.code` / `meta.name` 识别缓存。**
 **v2.8.0 起：输出目录改由 skill 根目录 `env` 的 `REPORT_OUTPUT_DIR`

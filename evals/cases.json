@@ -1,5 +1,5 @@
 {
-  "_note": "回归用例清单：cases/*.json 是输入，expect 是断言。改脚本后跑 `python3 evals/run.py`，全绿再提交。",
+  "_note": "回归用例清单：cases/*.json 是输入，expect 是断言。改脚本后跑 `python3 evals/run.py`，全绿再提交。断言键：expect_valid / expect_error_contains / expect_warn_contains / must_contain（md+html）/ html_contains / html_not_contains / md_not_contains / expect_stance / allow_only_warns。",
   "cases": [
     {
       "file": "cases/mingyue-v2.json",
@@ -88,6 +88,54 @@
       "expect_valid": true,
       "expect_warn_contains": [
         "末点比报告日"
+      ]
+    },
+    {
+      "file": "cases/rich-text-v2.json",
+      "desc": "富文本：**粗体** 与 `行内代码` 必须变成标签，HTML 里不许留字面量（N1/#3）",
+      "expect_valid": true,
+      "html_contains": [
+        "<strong>26Q1 55.20% → 26Q3 60.08%</strong>",
+        "<code>GrossIncomeRatio</code>",
+        "<strong>每季报必查</strong>"
+      ],
+      "html_not_contains": [
+        "**"
+      ],
+      "must_contain": [
+        "七、企业估值"
+      ]
+    },
+    {
+      "file": "cases/watchlist-dict-v2.json",
+      "desc": "watchlist 写成 dict：validate 必须报错，产物不许出现 Python 字面量（#2）",
+      "expect_valid": false,
+      "expect_error_contains": [
+        "必须是字符串"
+      ],
+      "html_not_contains": [
+        "{'指标'",
+        "{'阈值'"
+      ]
+    },
+    {
+      "file": "cases/outliers-v2.json",
+      "desc": "估值样本含 302 倍 PE 却没给缩尾口径：必须告警（#4）",
+      "expect_valid": true,
+      "expect_warn_contains": [
+        "缩尾"
+      ],
+      "html_not_contains": [
+        "缩尾后"
+      ]
+    },
+    {
+      "file": "cases/outliers-trimmed-v2.json",
+      "desc": "给了 percentile_trimmed：徽章并排两个口径，极端点画空心圈（#4）",
+      "expect_valid": true,
+      "html_contains": [
+        "历史 42% 分位（缩尾后 56%）",
+        "stroke=\"#c0392b\""
       ]
     }
   ]

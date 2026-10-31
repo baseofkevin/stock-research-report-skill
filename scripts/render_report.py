@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import report_stats as rs  # noqa: E402
 from report_paths import output_paths  # noqa: E402
 
 # ---------------------------------------------------------------- 样式
@@ -252,10 +253,18 @@ footer{
 
 
 def esc(v: Any) -> str:
-    """转 HTML，空值统一显示占位符。"""
+    """转 HTML，并把 **粗体** / `行内代码` 转成标签；空值统一显示占位符。
+
+    轻量标记**只在这里做一次**：正文、note、证据、清单、缺口全部走 esc()，
+    过去只给 _rich() 做转换，导致 insights.points、watchlist 里的 `**` 与反引号
+    原样出现在成稿里（2026-10-31 复盘 N1/#3）。esc() 不用于 HTML 属性，SVG 也不使用它。
+    """
     if v is None or v == "":
         return "—"
-    return html.escape(str(v))
+    out = html.escape(str(v))
+    out = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", out)      # 先粗体
+    out = re.sub(r"`([^`<]{1,60})`", r"<code>\1</code>", out)          # 再行内代码
+    return out
 
 
 def get(d: Any, *keys, default=None):
@@ -626,11 +635,8 @@ MOAT_SRC = {"strong": ("强", "lv-ok"), "mid": ("中", "lv-mid"),
 
 
 def _rich(txt) -> str:
-    """转义后用 **加粗** / `代码` 做轻量标记（护城河的长文本里到处是强调）。"""
-    out = esc(txt)
-    out = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", out)
-    out = re.sub(r"`([^`]+)`", r"<code>\1</code>", out)
-    return out
+    """向后兼容别名：轻量标记已并入 esc()，这里只做转发。"""
+    return esc(txt)
 
 
 def _moat_block(m) -> str:
@@ -761,8 +767,13 @@ def _points(series: list) -> list:
 
 
 def svg_series(points: list, unit: str = "x", tone: str = "mid",
-               median: float | None = None, height: int = 230) -> str:
-    """横轴时间、纵轴估值：一条曲线 + 中位虚线 + 当前值标在曲线末端。"""
+               median: float | None = None, height: int = 230,
+               trim: tuple[float, float] | None = None) -> str:
+    """横轴时间、纵轴估值：一条曲线 + 中位虚线 + 当前值标在曲线末端。
+
+    `trim` = 缩尾后的 [lo, hi]；落在区间外的点画成空心圈，提醒读者
+    「分位被这几个点带偏了」（见 §3.5 的极端值披露义务）。
+    """
     if len(points) < 5:
         return ""
     vals = [v for _, v in points]
@@ -801,6 +812,13 @@ def svg_series(points: list, unit: str = "x", tone: str = "mid",
                  f'fill="{color}" opacity=".07"/>')
     parts.append('<polyline points="' + " ".join(f"{p:.1f},{q:.1f}" for p, q in pts)
                  + '" fill="none" stroke="#6b7280" stroke-width="1.8" stroke-linejoin="round"/>')
+    # 缩尾区间外的极端样本：空心圈（不参与「当前值」标记）
+    if trim is not None:
+        tlo, thi = trim
+        for (d, v), (px, py) in zip(points, pts):
+            if v < tlo or v > thi:
+                parts.append(f'<circle cx="{px:.1f}" cy="{py:.1f}" r="3.1" '
+                             f'fill="#fff" stroke="#c0392b" stroke-width="1.2" opacity=".75"/>')
     # 中位
     if median is not None:
         my = yy(median)
@@ -863,11 +881,15 @@ def sec_valuation(v: dict, title: str = "企业估值") -> str:
         if len(vals) < 5 or not isinstance(cur, (int, float)):
             continue
         stat = _stats(vals)
-        pct = 100 * sum(1 for x in vals if x < cur) / len(vals)
+        pct = rs.percentile(vals, cur)
+        tpct = rs.trimmed_percentile(vals, cur)
         tone = m.get("tone") or ("ok" if pct <= 20 else ("high" if pct >= 80 else "mid"))
         cls = {"ok": "lv-ok", "high": "lv-high", "mid": "lv-mid", "na": "lv-na"}.get(tone, "lv-mid")
+        said = f"历史 {pct:.0f}% 分位"
+        if m.get("percentile_trimmed") is not None and abs(tpct - pct) >= 10:
+            said = f"历史 {pct:.0f}% 分位（缩尾后 {tpct:.0f}%）"
         badge = m.get("badge") or (
-            f"历史 {pct:.0f}% 分位"
+            said
             + ("（历史低位）" if pct <= 20 else ("（历史高位）" if pct >= 80 else ""))
         )
         out.append("<div class='val-item'>")
@@ -879,7 +901,8 @@ def sec_valuation(v: dict, title: str = "企业估值") -> str:
             f"区间 {stat['min']:.1f}–{stat['max']:.1f}{esc(unit)}　·　样本 {stat['n']} 个　·　"
             f"{esc(pts[0][0][:7])} 起</span></div>"
         )
-        svg = svg_series(pts, unit, tone=tone, median=stat["median"])
+        svg = svg_series(pts, unit, tone=tone, median=stat["median"],
+                         trim=rs.trim_bounds(vals))
         if svg:
             out.append(f'<div class="chart-box" style="border:none;background:none;padding:0">{svg}</div>')
         if m.get("note"):

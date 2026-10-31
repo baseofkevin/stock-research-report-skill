@@ -143,7 +143,8 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=20000, help="单次客户端超时毫秒（默认 20000）")
     ap.add_argument("--retries", type=int, default=3, help="超时/限频重试次数（默认 3）")
     ap.add_argument("--sleep", type=float, default=0.5, help="每次请求后的额外间隔秒（默认 0.5）")
-    ap.add_argument("--dry-run", action="store_true", help="只打印待补月份，不发请求")
+    ap.add_argument("--dry-run", action="store_true", help="只打印待补月份与耗时预估，不发请求")
+    ap.add_argument("-v", "--verbose", action="store_true", help="dry-run 时逐月打印待补月份")
     args = ap.parse_args()
 
     code = normalize_code(args.code)
@@ -155,7 +156,7 @@ def main() -> int:
         print(f"错误：找不到采集包 {path}；请先 collect_raw.py init。", file=sys.stderr)
         return 2
     try:
-        bundle = raw_bundle.load(path)
+        raw_bundle.load(path)          # 只验证可读；真正的读写都在 raw_bundle.update() 的锁里
     except (OSError, ValueError, json.JSONDecodeError) as e:
         print(f"错误：读取采集包失败：{e}", file=sys.stderr)
         return 1
@@ -166,15 +167,24 @@ def main() -> int:
         print("错误：--start 不能晚于 --end", file=sys.stderr)
         return 2
     targets = month_ends(start, end)
-    have = existing_months(bundle, code)
+    have = existing_months(raw_bundle.load(path), code)
     todo = [d for d in targets if (d.year, d.month) not in have]
 
     print(f"采集包        {path}")
     print(f"股票          {code}　区间 {start} ~ {end}")
     print(f"目标月份      {len(targets)}　已有 {len(have)}　待补 {len(todo)}")
     if args.dry_run:
-        for d in todo:
-            print(f"  待补 {d.isoformat()}（月末）")
+        # 实测约 3.0 秒/点（客户端每次 1.6s 间隔 + node 进程启动），
+        # 每 80 次预留一次 60s 退避；别拿 1.7s 估，会低估四成。
+        cost = len(todo) * 3.0 + (len(todo) // 80) * 60
+        print(f"预计耗时约 {int(cost // 60)} 分 {cost % 60:.0f} 秒"
+              f"（{len(todo)} 点 × 3.0s，含客户端 1.6s 间隔与限频退避）")
+        if len(todo) <= 8 or args.verbose:
+            for d in todo:
+                print(f"  待补 {d.isoformat()}（月末）")
+        elif todo:
+            print(f"  待补区间 {todo[0]:%Y-%m} ~ {todo[-1]:%Y-%m} 共 {len(todo)} 个月"
+                  f"（要逐月明细加 -v）")
         return 0
     if not todo:
         print("无需补采。")
@@ -204,13 +214,12 @@ def main() -> int:
                         status = "error"
                     else:
                         if has_data(response):
-                            raw_bundle.append(
-                                bundle, source="westock", tool="data_quote",
+                            raw_bundle.update(
+                                path, source="westock", tool="data_quote",
                                 params={"code": code, "date": day.isoformat()},
                                 response=response,
                                 note="sample_valuation 月末采样",
                             )
-                            raw_bundle.save(bundle, path)
                             print(f"[{idx}/{len(todo)}] {day} OK")
                             month_ok = day_done = True
                             break
@@ -228,15 +237,14 @@ def main() -> int:
                           f"({attempts}/{args.retries})", file=sys.stderr)
                     time.sleep(wait)
                     continue
-                # 其他错误：原样留证，跳过这一天
-                raw_bundle.append(
-                    bundle, source="westock", tool="data_quote",
+                # 其他错误：原样留证，跳过这一天（同样走锁内写）
+                raw_bundle.update(
+                    path, source="westock", tool="data_quote",
                     params={"code": code, "date": day.isoformat()},
                     raw_text=text,
                     error=f"sample_valuation {status}（尝试 {attempts} 次）",
                     note="sample_valuation 月末采样失败",
                 )
-                raw_bundle.save(bundle, path)
                 print(f"[{idx}/{len(todo)}] {day} FAILED {status}", file=sys.stderr)
                 month_failed = day_done = True
                 break
@@ -254,7 +262,7 @@ def main() -> int:
         if args.sleep:
             time.sleep(args.sleep)
 
-    covered = existing_months(bundle, code)
+    covered = existing_months(raw_bundle.load(path), code)
     hit = len({(d.year, d.month) for d in targets} & covered)
     print(f"完成：成功 {ok}　跳过 {skipped}　失败 {failed}")
     print(f"覆盖：{hit}/{len(targets)} 个月（{hit / len(targets) * 100:.1f}%）")

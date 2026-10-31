@@ -19,6 +19,9 @@ import sys
 from datetime import date
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import report_stats as rs  # noqa: E402
+
 LEVELS = {"正常", "健康", "偏弱", "关注", "留意", "警告", "较差", "高危", "危险", "无数据"}
 STATES = {"pass", "fail", "warn", "na"}
 REDFLAG_TOTAL = 25
@@ -136,12 +139,26 @@ def _check_valuation(data: dict, rep: Report) -> None:
             elif stale is not None and stale > 45:
                 rep.warn(f"估值指标「{name}」series 末点 {last_date} 比报告日 {asof} 早 "
                          f"{stale} 天：月末采样可以接受，但 valuation.note 要写明采样频率与样本区间")
-        calc = 100 * sum(1 for x in good if x < float(cur)) / len(good)
+        calc = rs.percentile(good, float(cur))
         declared = m.get("percentile")
         if declared is not None and _num(declared):
             if abs(float(declared) - calc) > 3:
                 rep.err(f"估值指标「{name}」percentile={declared} 与按 series 重算的 "
                         f"{calc:.1f}% 相差超过 3pct——分位数字和图画的对不上")
+        # 缩尾口径：样本被极端值（利润塌陷期的高 PE）压平时，必须同时给出缩尾后分位。
+        tcalc = rs.trimmed_percentile(good, float(cur))
+        tdeclared = m.get("percentile_trimmed")
+        if tdeclared is not None and _num(tdeclared):
+            if abs(float(tdeclared) - tcalc) > 3:
+                rep.err(f"估值指标「{name}」percentile_trimmed={tdeclared} 与按 series 重算的 "
+                        f"{tcalc:.1f}% 相差超过 3pct——缩尾分位和图上口径对不上")
+        elif rs.is_outlier_sample(good):
+            rep.warn(f"估值指标「{name}」的 series 含极端样本（最高 {max(good):.0f} 倍、"
+                     f"中位 {rs.median(good):.1f} 倍）：请补 percentile_trimmed（缩尾后 {tcalc:.1f}%），"
+                     f"否则分位会被压平、结论可能反向（见 §3.5）")
+        elif abs(tcalc - calc) >= 10 and tdeclared is None:
+            rep.warn(f"估值指标「{name}」全样本分位 {calc:.1f}% 与缩尾后 {tcalc:.1f}% 相差 "
+                     f"{abs(tcalc - calc):.1f}pct——两个口径都要写进报告")
         if float(cur) > max(good) * 1.0001 or float(cur) < min(good) * 0.9999:
             rep.warn(f"估值指标「{name}」当前值 {cur} 落在历史区间 "
                      f"{min(good):.2f}~{max(good):.2f} 之外，确认是否口径不同")
@@ -153,8 +170,9 @@ def _check_valuation(data: dict, rep: Report) -> None:
 
 MOAT_STRENGTHS = {"wide", "narrow", "none"}
 MOAT_SRC_STRENGTHS = {"strong", "mid", "weak", "none"}
-MOAT_CORE_ROWS = {"fcf", "net_margin", "roe"}
-MOAT_OPT_ROWS = {"fcf_margin", "roa"}
+# 文档（SKILL.md 字段表 / 指标体系 §9.4）说「五个必须有」，代码就必须一律报错，
+# 不能只对 fcf/net_margin/roe 报错、对 fcf_margin/roa 放水（2026-10-31 审核 N2）。
+MOAT_ROWS = {"fcf", "fcf_margin", "net_margin", "roe", "roa"}
 
 
 def _check_moat(data: dict, rep: Report) -> None:
@@ -188,12 +206,11 @@ def _check_moat(data: dict, rep: Report) -> None:
         rep.err("business.moat.metrics.rows 为空：缺少 FCF / 净利率 / ROE 等指标行")
 
     keys = {str(r.get("key")) for r in rows}
-    missing = MOAT_CORE_ROWS - keys
+    missing = MOAT_ROWS - keys
     if missing:
-        rep.err(f"business.moat.metrics.rows 缺少核心指标 {sorted(missing)}（FCF / 净利率 / ROE 必填）")
-    lack_opt = MOAT_OPT_ROWS - keys
-    if lack_opt:
-        rep.warn(f"business.moat.metrics.rows 缺 {sorted(lack_opt)}（建议补齐五个指标）")
+        rep.err(f"business.moat.metrics.rows 缺 {sorted(missing)}："
+                f"FCF / FCF 营收比 / 净利率 / ROE / ROA 五个都要有"
+                f"（缺行会让三节护城河表少一行、趋势图少一条线）")
 
     for r in rows:
         vals = r.get("values") or []
@@ -298,6 +315,10 @@ def check_data(data: dict, rep: Report, require_raw: bool = False) -> None:
     if code and not re.match(r"^(sh|sz|bj)\d{6}$", code):
         rep.err(f"meta.code={code!r} 不是 A 股代码（应为 sh/sz/bj + 6 位数字）；"
                 f"本 skill 不覆盖港股（hk）/美股（us）")
+    cap, cap_note = str(m.get("market_cap") or ""), str(m.get("cap_note") or "")
+    if "亿" in cap and "亿元" in cap_note:
+        rep.err(f"meta 市值单位重复：market_cap={cap!r} 已带单位，"
+                f"cap_note 不要再写「亿元」（否则渲染成「{cap}　亿元」）")
     if not m.get("price_at"):
         rep.warn("meta.price_at 缺失——盘中价出报告时必须写清行情时点，否则估值不可复现")
     elif m.get("chg_note") and m["price_at"] not in str(m["chg_note"]):
@@ -512,6 +533,10 @@ def check_data(data: dict, rep: Report, require_raw: bool = False) -> None:
         (rep.err if len(items) == 16 else rep.warn)(
             f"打分卡权重合计 {wsum:g}，指标体系定义为 {WEIGHT_SUM}"
             + ("" if len(items) == 16 else f"（当前只有 {len(items)} 项，故仅告警）"))
+    note_sc = str(sc.get("total_note") or "")
+    if items and "成长" not in note_sc:
+        rep.warn("scorecard.total_note 没提「成长」：本卡 16 项不含成长维度（§5 整章未进卡），"
+                 "必须在说明里点明「本卡只评质地不评成长」，否则强改善型公司会被静默判低")
     declared = sc.get("total")
     if declared and items and is_v2:
         text = str(declared).strip()
@@ -540,6 +565,16 @@ def check_data(data: dict, rep: Report, require_raw: bool = False) -> None:
         rep.err("conclusion.paragraphs 少于 3 段：八、综合研判必须有完整论证")
     elif len(c.get("paragraphs") or []) < 3:
         rep.warn("conclusion.paragraphs 少于 3 段")
+    for key, label in (("watchlist", "跟踪清单"), ("triggers", "触发条件"),
+                       ("paragraphs", "论证段落")):
+        vals = c.get(key) or []
+        if not isinstance(vals, list):
+            rep.err(f"conclusion.{key} 必须是字符串数组（当前 {type(vals).__name__}）")
+            continue
+        for i, item in enumerate(vals, 1):
+            if not isinstance(item, str) or not item.strip():
+                rep.err(f"conclusion.{key}[{i}]={item!r} 必须是字符串；"
+                        f"写成 dict 会被渲染成 Python 字面量（如 {{'item': …}}）")
     if len(c.get("watchlist") or []) < 3:
         rep.warn("conclusion.watchlist 少于 3 条")
     for w in c.get("watchlist") or []:
@@ -547,6 +582,32 @@ def check_data(data: dict, rep: Report, require_raw: bool = False) -> None:
             rep.err(f"watchlist 出现空话：{w}")
     if not c.get("triggers"):
         rep.warn("conclusion.triggers 为空（缺“判断修正的触发条件”）")
+
+    # ---------- PEG 的机构覆盖交叉核对 ----------
+    # data_rating.ratingCnt 是「评级记录条数」，不是覆盖机构数；只覆盖 1~2 家时
+    # PEG 的分母（预测净利）可靠性低，不能单独作为估值档位的主依据（2026-10-31 审核 #9）。
+    cover = None
+    for call in ((data.get("raw_data") or {}).get("calls") or []):
+        if str(call.get("tool")) != "data_rating":
+            continue
+        resp = call.get("response") if isinstance(call.get("response"), dict) else {}
+        body = resp.get("data") if isinstance(resp.get("data"), dict) else resp
+        # 取各口径里的最大值当「最乐观覆盖数」：institutionCnt=0 表示「没统计到」，
+        # 不能直接当 0 家（否则有 8 家评级、只是没统计的公司会被误报）。
+        for k in ("forecastInstitutions", "institutionCnt", "ratingCnt"):
+            v = body.get(k) if isinstance(body, dict) else None
+            if _num(v):
+                cover = int(v) if cover is None else max(cover, int(v))
+    metric_labels = " ".join(str(x.get("label", "")) for x in cm)
+    if cover is not None and cover < 3 and "PEG" in metric_labels:
+        hedge = " ".join([str(data.get("redflags_note") or ""),
+                          str(sc_note := (data.get("scorecard") or {}).get("total_note") or ""),
+                          str((data.get("valuation") or {}).get("note") or ""),
+                          " ".join(str(g) for g in (data.get("data_gaps") or []))])
+        if not any(k in hedge for k in ("覆盖", "1 家", "一家", "弱证据", "机构数")):
+            rep.warn(f"PEG 建立在 {cover} 家机构的预测上（data_rating/consensus 口径），"
+                     f"但 total_note / valuation.note / data_gaps 都没提覆盖不足——"
+                     f"按 §13 第 3 轴，覆盖 <3 家时 PEG 不得单独定档")
 
     # ---------- 数据缺口 ----------
     gaps = data.get("data_gaps")

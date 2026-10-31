@@ -15,6 +15,59 @@
 > 没有可靠的时分记录，保留到日。
 
 
+## v2.11.0 — 2026-10-31 16:10（采集包并发安全 + 文本层统一 + 分位双口径；落地复盘 12 条 + 审核漏项 5 条）
+
+一次把 `正海磁材-skill复盘与改进建议-20261031.md` 与
+`DeepSeekHarness/正海磁材-skill审核-20261031.md` 里的问题收敛掉；原本计划的
+v2.10.1 / v2.10.2 / v2.11.0 三个批次合并为一次发布（代码与文档必须同时改，否则对账不过）。
+
+**采集包（P0：终端说「已记录」、文件里没有）**
+- `scripts/raw_bundle.py`：新增 `locked()`（`fcntl.flock`，Windows 走 `msvcrt`）与
+  `update()`（锁内「重读 → 追加 → 写回 → 回读校验」）；`append()` 的 `seq` 改为 `max+1`；
+  `make_raw_data()` 发现重号时重编；`atomic_write_text()` 补 `fsync`。
+- `scripts/collect_raw.py`：`add/run` 改走 `_append() → raw_bundle.update()`，
+  打印「已记录 #N（包内共 M 条）」，M 是回读后的真实条数；`no_data` 标记也在锁内写入。
+- `scripts/sample_valuation.py`：每个采样点走 `raw_bundle.update()`，不再拿启动时的旧副本
+  整包写回；收尾统计重新读盘；`--dry-run` 增加耗时预估（3.0s/点 + 每 80 次 60s 退避）
+  并压缩明细输出（`-v` 看逐月）。
+- `evals/run.py`：新增 `test_concurrency()`——两个子进程同时写 40 条，断言 80 条零丢失、
+  `seq` 连续。
+
+**渲染与校验（静默错误）**
+- `scripts/render_report.py`：轻量标记（`**粗体**` / 反引号）并入 `esc()`，不再只在
+  `_rich()` 覆盖的字段生效（此前 `insights.points`、`watchlist`、`redflags.evidence`
+  会把 `**` 原样印出来）；`_rich` 退化为 `esc()` 的别名。
+- 新增 `scripts/report_stats.py`：校验器与渲染器共用一套分位算法（`percentile` /
+  `trimmed_percentile` / `is_outlier_sample` / `trim_bounds`）。
+- `scripts/render_report.py` / `render_md.py`：`percentile_trimmed` 与全样本分位相差
+  ≥10pct 时并排显示「历史 X% 分位（缩尾后 Y%）」；缩尾区间外的点画空心圈。
+- `scripts/validate.py`：`watchlist/triggers/paragraphs` 元素必须是字符串（dict 直接 err）；
+  `market_cap` 与 `cap_note` 重复写「亿元」报 err；护城河五指标缺任一从 warn 升为 err
+  （文档一直写「必须五个」）；`percentile_trimmed` 与 series 对账，极端样本缺缩尾口径时告警；
+  `total_note` 未提「成长」时告警；`data_rating` 覆盖 <3 家而报告仍用 PEG 定档时告警。
+- `scripts/lint_encoding.py`：`BUILTIN_ALLOW` 补 `strong` / `code` / `dict`（标签与类型名）。
+
+**文档（口径收拢）**
+- `references/指标体系.md`：§2.1 条件① 改成两个不等式（V 型不算改善）；§3.5 新增
+  **分位口径表**（样本、负值、极值、披露义务、禁止项，附正海 47.9% / 62.2% 实例）；
+  §6.4 三流组合补「先看资本支出、剔除理财净买入」；§7.1 定义「理财类资产」并明确
+  货币资金不混算；§12 #9 指向该定义；§13 声明 16 项**不含成长**、PEG 覆盖 <3 家不定档、
+  `watchlist` 载体是字符串。
+- `references/westock-接口.md`：`data_rating` 返回结构与 `ratingCnt`（评级记录条数）写清，
+  附 `sz300224` 实测三值；§6.4 加 PEG 覆盖率硬规则；§6.2 加 `market_name` 禁用说明与
+  板块前缀表（`sz300224` 会被返回「深圳主板」）。
+- `references/解读范式.md`：打分卡表下固定写「本卡只评质地不评成长」；跟踪清单注明
+  每项是字符串与推荐写法。
+- `SKILL.md`：`market_cap` 带单位 / `cap_note` 只写股本；`valuation` 说明
+  `percentile_trimmed`；`scorecard.total_note` 固定句；`conclusion` 三个数组都是字符串；
+  第 1 步加「采样期间别写同一个包」；取数纪律加 PEG 覆盖率规则；常见错误补两条。
+- `evals/cases.json`：新增 4 个用例（富文本、watchlist 传 dict、极端样本缺缩尾口径、
+  缩尾口径并排显示），断言新增 `html_contains` / `html_not_contains` / `md_not_contains`。
+
+> 这一版是「先提交再改」的产物：v2.10.0 之前 `collect_raw.py` / `raw_bundle.py` /
+> `report_cache.py` / `report_paths.py` / `save_report.py` / `sample_valuation.py`
+> 六个脚本一直没进 git，本次先打快照提交，再动代码。
+
 ## v2.10.0 — 2026-10-31 15:30（修静默错列/丢说明；采集包不再静默新建；月末采样脚本化）
 
 把复盘里「不报错但产出错」的几类问题一起收口，并补上可复跑的采样脚本。

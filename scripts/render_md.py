@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import report_stats as rs  # noqa: E402
 from render_report import (  # noqa: E402
     SECTION_TITLES, get, numbered, redflag_head, strip_heading_num,
 )
@@ -259,9 +260,13 @@ def v_valuation(v: dict, title: str = "企业估值") -> str:
         cur = m.get("current")
         if not stat or not isinstance(cur, (int, float)):
             continue
-        pct = 100 * sum(1 for x in vals if x < cur) / len(vals)
+        pct = rs.percentile(vals, cur)
+        tpct = rs.trimmed_percentile(vals, cur)
+        pct_cell = f"{pct:.0f}%"
+        if m.get("percentile_trimmed") is not None and abs(tpct - pct) >= 10:
+            pct_cell += f"（缩尾后 {tpct:.0f}%）"
         span = f"{pts[0][0][:7]} 起" if pts and pts[0][0] else ""
-        rows.append([t(m.get("name")), f"{cur:g}{unit}", f"{pct:.0f}%",
+        rows.append([t(m.get("name")), f"{cur:g}{unit}", pct_cell,
                      f"{stat['median']:.1f}{unit}",
                      f"{stat['min']:.1f}–{stat['max']:.1f}{unit}",
                      f"{stat['n']}{(' · ' + span) if span else ''}"])

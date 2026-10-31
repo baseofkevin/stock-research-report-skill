@@ -75,17 +75,30 @@ def _read_response(args: argparse.Namespace) -> tuple[Any, str | None]:
     raise SystemExit("add 需要 --response / --response-file / --text 之一")
 
 
-def _load_bundle(path: Path, code: str, create: bool) -> dict | None:
-    """读取已有采集包；不存在时默认拒绝，只有显式 --create 才新建。"""
+def _ensure_bundle(path: Path, code: str, create: bool) -> bool:
+    """确保采集包存在；不存在时默认拒绝，只有显式 --create 才新建。"""
     if path.exists():
-        return raw_bundle.load(path)
+        return True
     if not create:
         print(f"错误：找不到采集包 {path}；请先 init（确实要新建空包就加 --create）。",
               file=sys.stderr)
-        return None
+        return False
     print(f"提示：{path} 不存在，按 --create 新建空采集包；"
           "如果是想续写旧包，请检查路径是否跨命令持久。", file=sys.stderr)
-    return raw_bundle.new_bundle(code or "")
+    raw_bundle.save(raw_bundle.new_bundle(code or ""), path)
+    return True
+
+
+def _append(path: Path, code: str, create: bool, **kwargs) -> tuple[dict, dict] | None:
+    """锁内追加一条并回读：并发采样时不会互相覆盖，「已记录」也不再是空话。"""
+    if not _ensure_bundle(path, code, create):
+        return None
+    try:
+        bundle = raw_bundle.update(path, **kwargs)
+    except (TimeoutError, OSError, ValueError) as e:
+        print(f"错误：写入采集包失败：{e}", file=sys.stderr)
+        return None
+    return bundle, bundle["calls"][-1]
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -101,16 +114,14 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 def cmd_add(args: argparse.Namespace) -> int:
     path = Path(args.path).expanduser()
-    bundle = _load_bundle(path, args.code, args.create)
-    if bundle is None:
-        return 2
     response, raw_text = _read_response(args)
     params = _load_json_arg(args.params)
     if not isinstance(params, dict):
         print("错误：--params 必须是 JSON 对象", file=sys.stderr)
         return 2
-    call = raw_bundle.append(
-        bundle,
+    extra = {"no_data": True} if (raw_text and _is_no_data_text(raw_text)) else None
+    got = _append(
+        path, args.code, args.create,
         source=args.source,
         tool=args.tool,
         params=params,
@@ -120,15 +131,17 @@ def cmd_add(args: argparse.Namespace) -> int:
         url=args.url or "",
         note=args.note or "",
         at=args.at,
+        _extra=extra,
     )
+    if got is None:
+        return 2
+    bundle, call = got
+    total = len(bundle.get("calls") or [])
     if call.get("ok") is False and _is_no_data_text(raw_text or ""):
-        call["no_data"] = True
-    raw_bundle.save(bundle, path)
-    if call.get("no_data"):
-        print(f"已记录 #{call['seq']} {args.tool} [NO DATA] → {path}")
+        print(f"已记录 #{call['seq']} {args.tool} [NO DATA]（包内共 {total} 条） → {path}")
         return 0
     mark = "ok" if call.get("ok") is not False else "FAILED"
-    print(f"已记录 #{call['seq']} {args.tool} [{mark}] → {path}")
+    print(f"已记录 #{call['seq']} {args.tool} [{mark}]（包内共 {total} 条） → {path}")
     if call.get("ok") is False:
         print("警告：这是一条失败/非 JSON 返回，已原样保留；不要把它当成「那天没数据」。",
               file=sys.stderr)
@@ -138,8 +151,7 @@ def cmd_add(args: argparse.Namespace) -> int:
 
 def cmd_run(args: argparse.Namespace) -> int:
     path = Path(args.path).expanduser()
-    bundle = _load_bundle(path, args.code, args.create)
-    if bundle is None:
+    if not _ensure_bundle(path, args.code, args.create):
         return 2
     params = _load_json_arg(args.params)
     if not isinstance(params, dict):
@@ -152,44 +164,42 @@ def cmd_run(args: argparse.Namespace) -> int:
     cmd = ["node", str(client), "call", args.tool, json.dumps(params, ensure_ascii=False)]
     print(f"$ {' '.join(cmd[:4])} …", file=sys.stderr)
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=args.timeout)
+    no_data = False
     if proc.returncode == 0:
         try:
             response = json.loads(proc.stdout)
         except json.JSONDecodeError:
-            call = raw_bundle.append(
-                bundle, source=args.source, tool=args.tool, params=params,
-                raw_text=proc.stdout, error="客户端退出 0 但 stdout 不是 JSON",
-                note=args.note or "")
+            fields = dict(raw_text=proc.stdout, error="客户端退出 0 但 stdout 不是 JSON")
         else:
-            call = raw_bundle.append(
-                bundle, source=args.source, tool=args.tool, params=params,
-                response=response, note=args.note or "")
+            fields = dict(response=response)
     else:
         # exit 3 = 工具返回纯文本；原文必须保留。
         # 但「未找到 / 暂无 / 无数据」是业务无数据，不是参数错，单独标记，方便不重试。
         no_data = _is_no_data_text(proc.stdout)
         error_text = "" if no_data else (proc.stderr or f"客户端退出码 {proc.returncode}").strip()[:1000]
-        call = raw_bundle.append(
-            bundle, source=args.source, tool=args.tool, params=params,
-            raw_text=proc.stdout,
-            error=error_text or ("" if no_data else "unknown"),
-            note=args.note or "")
-        if no_data:
-            call["no_data"] = True
-    raw_bundle.save(bundle, path)
+        fields = dict(raw_text=proc.stdout,
+                      error=error_text or ("" if no_data else "unknown"))
+    got = _append(path, args.code, False,
+                  source=args.source, tool=args.tool, params=params, **fields,
+                  note=args.note or "",
+                  _extra={"no_data": True} if no_data else None)
+    if got is None:
+        return 2
+    bundle, call = got
+    total = len(bundle.get("calls") or [])
     if call.get("no_data"):
-        print(f"已记录 #{call['seq']} {args.tool} [NO DATA] → {path}")
+        print(f"已记录 #{call['seq']} {args.tool} [NO DATA]（包内共 {total} 条） → {path}")
         print(f"  业务无数据：{(proc.stdout or '').strip()[:160]}", file=sys.stderr)
         return 0
     if call.get("ok") is False:
         detail = (call.get("error") or "").strip().splitlines()
         raw = (call.get("raw_text") or "").strip().splitlines()
         first = (detail[0] if detail else (raw[0] if raw else "unknown"))[:120]
-        print(f"已记录 #{call['seq']} {args.tool} [FAILED] {first} → {path}")
+        print(f"已记录 #{call['seq']} {args.tool} [FAILED] {first}（包内共 {total} 条） → {path}")
         if raw and (not detail or raw[0] != detail[0]):
             print(f"  原文：{raw[0][:160]}", file=sys.stderr)
         return proc.returncode or 3
-    print(f"已记录 #{call['seq']} {args.tool} [ok] → {path}")
+    print(f"已记录 #{call['seq']} {args.tool} [ok]（包内共 {total} 条） → {path}")
     return 0
 
 

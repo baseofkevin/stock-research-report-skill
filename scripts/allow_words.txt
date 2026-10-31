@@ -66,3 +66,6 @@ longtermLoan
 nonCurrentLiabilityIn1Year
 otherCurrentAssets
 totalAssets
+
+# 平台名（CHANGELOG 讲跨平台锁时会提到）
+windows

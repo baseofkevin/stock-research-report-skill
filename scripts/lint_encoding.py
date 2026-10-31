@@ -79,6 +79,8 @@ BUILTIN_ALLOW = {
     "data_gaps", "price_at", "schema_version", "v1", "v2", "md",
     # 接口字段名（出现在数据口径说明里）
     "grossincomeratio", "shareholdernum", "interestbeardebt", "institutioncnt",
+    # 渲染标签与类型名（用例断言里会直接写 <strong> / <code> / dict）
+    "strong", "code", "dict",
 }
 
 # 行内 / 文件级豁免标记：<!-- lint-allow: A, B --> / <!-- lint-allow-file: C -->
