@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from render_report import (  # noqa: E402
     SECTION_TITLES, get, numbered, redflag_head, strip_heading_num,
 )
+from report_paths import output_paths  # noqa: E402
 
 STATE_TXT = {"pass": "通过", "fail": "否决", "warn": "存疑", "na": "无数据"}
 
@@ -177,6 +178,8 @@ def b_moat(m) -> str:
         body = [[t(r.get("name"))] + [t(v) for v in (r.get("values") or [])] for r in rows]
         out += [md_table(["指标"] + [t(y) for y in years], body, "l" + "c" * len(years)), ""]
         judge = mt.get("judge") or {}
+        if isinstance(judge, str):
+            judge = [judge]                 # 旧写法兼容：一句话只出一条，不逐字拆
         if judge:
             for v in (judge.values() if isinstance(judge, dict) else judge):
                 out.append(f"- {t(v)}")
@@ -487,6 +490,8 @@ def b_redflags(items: list[dict], title: str = "排雷扫描", note: str = "") -
                  (f"#{t(r.get('id'))} " if r.get("id") is not None else "") + t(r.get("text")),
                  t(r.get("evidence"))] for r in hits]
         out += [md_table(["等级", "信号", "依据"], rows, "cll"), ""]
+        if note:
+            out += [f"**补充**：{t(note)}", ""]
     return "\n".join(out)
 
 
@@ -645,7 +650,9 @@ def render_md(data: dict) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description="个股分析 JSON → Markdown 报告")
     ap.add_argument("json_path", help="数据 JSON 文件路径")
-    ap.add_argument("-o", "--out", help="输出 Markdown 路径，默认同目录 report.md")
+    ap.add_argument("-o", "--out", help="输出 Markdown 路径；省略时按 env 配置的目录 + 同名主文件名")
+    ap.add_argument("--env-file", help="临时指定 env 文件（默认 skill 根目录/env）")
+    ap.add_argument("--out-dir", help="临时覆盖输出目录（不改 env）")
     args = ap.parse_args()
 
     src = Path(args.json_path).expanduser()
@@ -658,7 +665,10 @@ def main() -> int:
         print(f"错误：JSON 解析失败 {e}", file=sys.stderr)
         return 1
 
-    out = Path(args.out).expanduser() if args.out else src.with_name("report.md")
+    if args.out:
+        out = Path(args.out).expanduser()
+    else:
+        out = output_paths(data, out_dir=args.out_dir, env_file=args.env_file)["md"]
     out.parent.mkdir(parents=True, exist_ok=True)
     text = render_md(data)
     out.write_text(text, encoding="utf-8")

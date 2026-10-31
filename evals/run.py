@@ -29,6 +29,194 @@ def run(cmd: list[str]) -> tuple[int, str, str]:
     return p.returncode, p.stdout, p.stderr
 
 
+def test_output_pipeline(verbose: bool = False) -> int:
+    """v2.8.0 输出契约：env 中文路径 + raw_data 合并 + 三件套同名。"""
+    case = ROOT / "cases" / "mingyue-v2.json"
+    problems: list[str] = []
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        out_dir = root / "中文 目录" / "股票报告"
+        env_file = root / "env"
+        env_file.write_text(f"REPORT_OUTPUT_DIR={out_dir}\n", encoding="utf-8")
+        raw_file = root / "raw.json"
+        raw_file.write_text(json.dumps({
+            "schema": "raw-v1",
+            "code": "sz301101",
+            "calls": [{
+                "source": "westock",
+                "tool": "data_search",
+                "params": {"query": "明月镜片"},
+                "at": "2026-10-31 14:00:00",
+                "ok": True,
+                "response": {"ok": True, "data": [{"code": "sz301101", "name": "明月镜片"}]},
+            }],
+        }, ensure_ascii=False), encoding="utf-8")
+
+        rc, out, err = run([sys.executable, str(SCRIPTS / "save_report.py"),
+                            str(case), "--raw", str(raw_file), "--env-file", str(env_file)])
+        if rc != 0:
+            problems.append(f"save_report 失败 rc={rc} {(err or out)[:300]}")
+        else:
+            jsons = list(out_dir.glob("*.json"))
+            htmls = list(out_dir.glob("*.html"))
+            mds = list(out_dir.glob("*.md"))
+            if not (len(jsons) == len(htmls) == len(mds) == 1):
+                problems.append(f"三件套数量不对：json={len(jsons)} html={len(htmls)} md={len(mds)}")
+            else:
+                stems = {jsons[0].stem, htmls[0].stem, mds[0].stem}
+                if len(stems) != 1:
+                    problems.append(f"三件套主文件名不一致：{sorted(stems)}")
+                if "中文 目录" not in str(jsons[0]):
+                    problems.append("中文/空格输出目录没有生效")
+                data = json.loads(jsons[0].read_text(encoding="utf-8"))
+                raw = data.get("raw_data") or {}
+                if raw.get("call_count") != 1 or not raw.get("calls"):
+                    problems.append("交付 JSON 没有正确并入 raw_data")
+                if "_data_package" not in data:
+                    problems.append("交付 JSON 缺 _data_package 说明")
+                # 已研究过：能按 6 位代码查到缓存；--reuse 只更新三件套
+                rc3, o3, e3 = run([sys.executable, str(SCRIPTS / "report_cache.py"),
+                                   "lookup", "--code", "301101",
+                                   "--env-file", str(env_file), "--json"])
+                try:
+                    cache = json.loads(o3)
+                except json.JSONDecodeError:
+                    cache = {}
+                    problems.append(f"report_cache 输出不是 JSON：{(o3 or e3)[:200]}")
+                if rc3 != 0 or not cache.get("cached"):
+                    problems.append(f"已保存的报告没有被识别为缓存 rc={rc3}")
+                rc4, o4, e4 = run([sys.executable, str(SCRIPTS / "save_report.py"),
+                                   "--reuse", "--code", "sz301101",
+                                   "--env-file", str(env_file)])
+                if rc4 != 0:
+                    problems.append(f"save_report --reuse 失败 rc={rc4} {(e4 or o4)[:200]}")
+                if len(list(out_dir.glob("*.json"))) != 1:
+                    problems.append("--reuse 不应为同一公司新增第二份 JSON")
+                rc5, o5, e5 = run([sys.executable, str(SCRIPTS / "report_cache.py"),
+                                   "lookup", "--code", "600519",
+                                   "--env-file", str(env_file), "--json"])
+                try:
+                    missing = json.loads(o5)
+                except json.JSONDecodeError:
+                    missing = {}
+                if missing.get("cached"):
+                    problems.append("未研究过的公司被误判为已有缓存")
+                # 旧产物只有 HTML/MD：应识别成 legacy_only，不能冒充可复用数据
+                legacy_dir = root / "旧 报告"
+                legacy_dir.mkdir(parents=True, exist_ok=True)
+                (legacy_dir / "测试公司-企业信息解读-20261030.md").write_text(
+                    "# 测试公司（sz300999）企业信息解读\n\n旧版报告，没有 JSON。\n",
+                    encoding="utf-8")
+                legacy_env = root / "env-legacy"
+                legacy_env.write_text(f"REPORT_OUTPUT_DIR={legacy_dir}\n", encoding="utf-8")
+                rc6, o6, e6 = run([sys.executable, str(SCRIPTS / "report_cache.py"),
+                                   "lookup", "--code", "sz300999",
+                                   "--env-file", str(legacy_env), "--json"])
+                try:
+                    legacy = json.loads(o6)
+                except json.JSONDecodeError:
+                    legacy = {}
+                    problems.append(f"legacy 查询输出不是 JSON：{(o6 or e6)[:200]}")
+                if not legacy.get("cached") or not legacy.get("legacy_only"):
+                    problems.append("只有旧 HTML/MD 的公司没有被识别为 legacy_only")
+                if legacy.get("has_data"):
+                    problems.append("没有 JSON 的旧报告被误判为 has_data")
+                if verbose:
+                    print(f"  · 输出契约实测：{jsons[0].name} / "
+                          f"{htmls[0].name} / {mds[0].name}")
+    status = "PASS" if not problems else "FAIL"
+    print(f"[{status}] 输出契约 — env 中文路径 + raw_data + 三件套同名")
+    for p in problems:
+        print(f"        ! {p}")
+    return 1 if problems else 0
+
+
+def test_silent_guards(verbose: bool = False) -> int:
+    """v2.10 静默降级防护：judge 字符串、表头错列、price.records、排雷补充说明。"""
+    case = ROOT / "cases" / "mingyue-v2.json"
+    problems: list[str] = []
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        data = json.loads(case.read_text(encoding="utf-8"))
+        data["business"]["moat"]["metrics"]["judge"] = "五年里 ROE 有 3 年低于 15%，护城河偏窄"
+        data["financials"]["yoy"]["headers"].append("测试多一列")
+        data["price"]["records"] = [{"label": "2021 年", "value": "1.88 ~ 5.12 元"}]
+        data["redflags"] = [{"id": 9, "level": "关注", "text": "低 PB 里三成是现金",
+                             "evidence": "测试依据", "hit": True}]
+        data["redflags_note"] = "这是命中项之后的补充说明，不能丢。"
+        bad = root / "bad.json"
+        bad.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+        rc, out, err = run([sys.executable, str(SCRIPTS / "validate.py"), str(bad)])
+        joined = out + err
+        if rc == 0:
+            problems.append("judge 字符串 / headers 错列 / price.records 错键，validate 应失败")
+        for needle in ("judge 必须是对象", "financials.yoy", "price.records"):
+            if needle not in joined:
+                problems.append(f"validate 没报出 {needle!r}")
+        md = root / "bad.md"
+        html = root / "bad.html"
+        rc1, o1, e1 = run([sys.executable, str(SCRIPTS / "render_md.py"), str(bad), "-o", str(md)])
+        rc2, o2, e2 = run([sys.executable, str(SCRIPTS / "render_report.py"), str(bad), "-o", str(html)])
+        if rc1 != 0 or not md.exists():
+            problems.append(f"MD 渲染失败 rc={rc1} {(e1 or o1)[:200]}")
+        if rc2 != 0 or not html.exists():
+            problems.append(f"HTML 渲染失败 rc={rc2} {(e2 or o2)[:200]}")
+        md_text = md.read_text(encoding="utf-8") if md.exists() else ""
+        html_text = html.read_text(encoding="utf-8") if html.exists() else ""
+        if "这是命中项之后的补充说明，不能丢。" not in md_text:
+            problems.append("MD 命中项之后的 redflags_note 丢了")
+        if "这是命中项之后的补充说明，不能丢。" not in html_text:
+            problems.append("HTML 命中项之后的 redflags_note 丢了")
+        if "五年里 ROE 有 3 年低于 15%，护城河偏窄" not in md_text:
+            problems.append("judge 字符串没有按一整条渲染")
+        if "\n- 五\n" in md_text or "\n- 年\n" in md_text:
+            problems.append("judge 字符串仍被逐字拆成多条")
+
+        # 合法样例不应再出现「labels 7 ≠ periods 17」这种跨图误报
+        rc3, o3, e3 = run([sys.executable, str(SCRIPTS / "validate.py"), str(case)])
+        if "≠ periods" in (o3 + e3):
+            problems.append("合法年度子集 labels 仍被拿 periods 长度误报")
+
+        # 采集包不存在：默认拒绝，不能静默 new_bundle
+        missing = root / "不存在" / "raw.json"
+        rc4, o4, e4 = run([sys.executable, str(SCRIPTS / "collect_raw.py"), "run",
+                           str(missing), "--tool", "data_quote", "--params", "{}"])
+        if rc4 != 2 or missing.exists():
+            problems.append(f"collect_raw run 对缺失包应 rc=2 且不建文件，实际 rc={rc4}")
+        if "请先 init" not in (o4 + e4):
+            problems.append("collect_raw run 缺失包时没有提示 init")
+        rc5, o5, e5 = run([sys.executable, str(SCRIPTS / "collect_raw.py"), "status", str(missing)])
+        if rc5 != 1 or "请先 init" not in (o5 + e5):
+            problems.append("collect_raw status 对缺失包没有友好报错")
+
+        # 月末采样：只补缺失月份，dry-run 不联网
+        raw = root / "raw.json"
+        raw.write_text(json.dumps({
+            "schema": "raw-v1", "code": "sz000629", "created_at": "x", "updated_at": "x",
+            "calls": [{"source": "westock", "tool": "data_quote",
+                       "params": {"code": "sz000629", "date": "2026-06-30"},
+                       "at": "x", "ok": True,
+                       "response": {"ok": True, "data": {"sz000629": {"close": 1.0}}}}],
+        }, ensure_ascii=False), encoding="utf-8")
+        rc6, o6, e6 = run([sys.executable, str(SCRIPTS / "sample_valuation.py"),
+                           "--code", "sz000629", "--raw", str(raw),
+                           "--start", "2026-06-01", "--end", "2026-09-30", "--dry-run"])
+        if rc6 != 0 or "待补 3" not in (o6 + e6):
+            problems.append(f"sample_valuation dry-run 应识别已有 1 个月、待补 3 个，实际 rc={rc6} {(o6 + e6)[:200]}")
+        rc7, o7, e7 = run([sys.executable, str(SCRIPTS / "sample_valuation.py"),
+                           "--code", "sz000629", "--raw", str(root / "nope.json"), "--dry-run"])
+        if rc7 != 2 or "请先" not in (o7 + e7):
+            problems.append("sample_valuation 对缺失采集包没有拒绝")
+        if verbose:
+            print("  · 静默防护实测：judge/错列/price.records/redflags_note/采样 dry-run")
+    status = "PASS" if not problems else "FAIL"
+    print(f"[{status}] 静默降级防护 — judge/错列/records/补充说明/采集包守卫/采样 dry-run")
+    for p in problems:
+        print(f"        ! {p}")
+    return 1 if problems else 0
+
+
 def main() -> int:
     verbose = "-v" in sys.argv
     man = json.loads((ROOT / "cases.json").read_text(encoding="utf-8"))
@@ -98,6 +286,12 @@ def main() -> int:
         failed += bool(problems)
 
     print(f"\n{len(man['cases']) - failed}/{len(man['cases'])} 个用例通过")
+
+    # ---- 输出契约：env 中文路径、raw_data 合并、三件套同名 ----
+    failed += test_output_pipeline(verbose)
+
+    # ---- 静默降级防护：judge / 表头错列 / records / 补充说明 / 采集包守卫 ----
+    failed += test_silent_guards(verbose)
 
     # ---- 文档交叉引用检查（改文档忘了改代码，是这类 skill 最常见的错） ----
     rc, out, err = run([sys.executable, str(SCRIPTS / "check_docs.py")])

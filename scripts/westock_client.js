@@ -20,6 +20,7 @@
  * 环境变量：
  *   WORKBUDDY_HOME   自定义 ~/.workbuddy 位置
  *   WESTOCK_INTERVAL 每次调用之间的间隔毫秒（默认 1600，防「服务限频」）
+ *   WESTOCK_TIMEOUT  单次 HTTP 超时毫秒（默认 60000；也可用 call ... --timeout 20000）
  */
 
 'use strict';
@@ -31,6 +32,7 @@ const crypto = require('crypto');
 const WB_HOME = process.env.WORKBUDDY_HOME || path.join(os.homedir(), '.workbuddy');
 const HKDF_INFO = Buffer.from('workbuddy-oauth-credentials-v1', 'utf8');
 const INTERVAL = Number(process.env.WESTOCK_INTERVAL || 1600);
+let TIMEOUT = Number(process.env.WESTOCK_TIMEOUT || 60000);
 
 function die(msg) {
   console.error(`[westock] ${msg}`);
@@ -130,7 +132,7 @@ function postOnce(target, headers, body) {
         res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, text: data }));
       }
     );
-    req.setTimeout(60000, () => req.destroy(new Error('请求超时 60s')));
+    req.setTimeout(TIMEOUT, () => req.destroy(new Error(`请求超时 ${Math.round(TIMEOUT / 1000)}s`)));
     req.on('error', reject);
     req.write(body);
     req.end();
@@ -224,6 +226,12 @@ function selftest() {
 async function main() {
   const cmd = process.argv[2] || 'check';
   if (cmd === 'selftest') { selftest(); return; }
+  const ti = process.argv.indexOf('--timeout');
+  if (ti >= 0) {
+    const v = Number(process.argv[ti + 1]);
+    if (!Number.isFinite(v) || v < 1000 || v > 120000) die('--timeout 必须是 1000~120000 的毫秒数');
+    TIMEOUT = v;
+  }
   const { url } = findEndpoint();
   const t = getToken();
   const expired = t.expiresAt && t.expiresAt < Date.now();

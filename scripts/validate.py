@@ -174,6 +174,11 @@ def _check_moat(data: dict, rep: Report) -> None:
 
     years = m.get("years") or []
     mt = m.get("metrics") or {}
+    judge = mt.get("judge")
+    if judge is not None and not isinstance(judge, dict):
+        (rep.err if str(data.get("schema_version")) == "2" else rep.warn)(
+            "business.moat.metrics.judge 必须是对象 {fcf|fcf_margin|net_margin|roe|roa: 判定句}；"
+            "写成字符串会按字符拆成多条（渲染器已做单条兼容，但仍应改成对象）")
     rows = mt.get("rows") or []
     if not years:
         rep.err("business.moat.years 为空：五指标必须按年铺开")
@@ -239,7 +244,7 @@ def _check_moat(data: dict, rep: Report) -> None:
         rep.warn("business.moat.verdict 为空：护城河要有明确结论")
 
 
-def check(path: Path, rep: Report) -> None:
+def check(path: Path, rep: Report, require_raw: bool = False) -> None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception as e:                                    # noqa: BLE001
@@ -248,6 +253,34 @@ def check(path: Path, rep: Report) -> None:
     if not isinstance(data, dict):
         rep.err("根节点必须是对象")
         return
+    check_data(data, rep, require_raw=require_raw)
+
+
+def _check_raw_data(data: dict, rep: Report, require_raw: bool) -> None:
+    """交付 JSON 里的 raw_data：远程原始返回必须原样同存。
+
+    `--require-raw` 由 save_report.py 打开；普通结构校验默认不强制，
+    以免历史样例（没有 raw_data）全部变红。
+    """
+    raw = data.get("raw_data")
+    if raw is None:
+        if require_raw:
+            rep.err("缺少 raw_data：远程原始返回必须与计算结果同存一个 JSON"
+                    "（用 collect_raw.py 采集、save_report.py 合并）")
+        return
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from raw_bundle import validate_raw_data            # noqa: PLC0415
+    except Exception as e:                                  # noqa: BLE001
+        rep.warn(f"raw_data 结构未能检查：{e}")
+        return
+    for msg in validate_raw_data(raw):
+        (rep.err if require_raw else rep.warn)(f"raw_data：{msg}")
+
+
+def check_data(data: dict, rep: Report, require_raw: bool = False) -> None:
+    """直接在内存里校验报告数据（save_report.py 用）。"""
+    _check_raw_data(data, rep, require_raw)
 
     # ---------- schema / meta ----------
     is_v2 = str(data.get("schema_version")) == "2"
@@ -284,7 +317,12 @@ def check(path: Path, rep: Report) -> None:
     elif data.get("core_summary") and len(str(data.get("core_summary")).strip()) < 8:
         rep.err("core_summary 太短：至少写出一句可读的初步判断")
 
-    # ---------- 股价图数值 ----------
+    # ---------- 股价表与图 ----------
+    for i, r in enumerate((data.get("price") or {}).get("records") or [], 1):
+        if not str(r.get("name") or "").strip() or not str(r.get("range") or "").strip():
+            (rep.err if is_v2 else rep.warn)(
+                f"price.records 第 {i} 行必须用 name/range/note（不是 label/value）；"
+                f"缺 name 或 range 会渲染成「—」")
     for c in (data.get("price") or {}).get("chart_data") or []:
         if c.get("value") is not None and not _num(c.get("value")):
             rep.err(f"price.chart_data 的 value={c.get('value')!r} 不是数字；"
@@ -329,16 +367,29 @@ def check(path: Path, rep: Report) -> None:
         if not (16 <= len(qt) <= 20):
             rep.warn(f"单季主表 {len(qt)} 行，建议 16~20 行")
 
+        for key, label in (("yoy", "同季同比"), ("cumulative", "累计口径")):
+            block = f.get(key) or {}
+            headers = block.get("headers") or []
+            if not headers:
+                continue
+            rows2 = block.get("series") or []
+            if not rows2:
+                rep.warn(f"financials.{key}（{label}）给了 headers 但 series 为空")
+            for row in rows2:
+                vals = row.get("values") or []
+                if len(vals) != len(headers):
+                    rep.err(f"financials.{key}.series「{row.get('name', '?')}」有 "
+                            f"{len(vals)} 个值，但 headers 有 {len(headers)} 列（表格会错列）；"
+                            f"headers 只放数据列，首列用 first_col")
+
         charts = f.get("charts") or []
         if not charts:
             rep.warn("financials.charts 为空，财务全景会没有图")
         for ci, ch in enumerate(charts, 1):
             ctitle = ch.get("title") or f"图 {ci}"
             lv = ch.get("labels") or periods
-            if not ch.get("labels"):
-                rep.warn(f"图「{ctitle}」未给 labels，已回退到 periods（文档曾写“必须给”，实际可选）")
-            if len(lv) != len(periods):
-                rep.warn(f"图「{ctitle}」labels {len(lv)} 个 ≠ periods {len(periods)} 个")
+            # labels 可以是更短的年度子集（如 7 年 vs 17 期）；只要求
+            # series[].values 与本图 labels 等长，不跨图跟 periods 比。
             ser = ch.get("series") or []
             if not ser:
                 rep.err(f"图「{ctitle}」没有 series")
@@ -513,6 +564,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="报告数据 JSON 自检（v2）")
     ap.add_argument("json_path")
     ap.add_argument("--strict", action="store_true", help="把警告也算作失败")
+    ap.add_argument("--require-raw", action="store_true",
+                    help="要求 raw_data 存在且结构完整（交付时用；save_report.py 默认打开）")
     args = ap.parse_args()
     p = Path(args.json_path).expanduser()
     if not p.exists():
@@ -520,7 +573,7 @@ def main() -> int:
         return 1
 
     rep = Report()
-    check(p, rep)
+    check(p, rep, require_raw=args.require_raw)
     print(f"== {p.name}: {len(rep.errors)} 个错误, {len(rep.warns)} 个警告")
     for e in rep.errors:
         print(f"  [错误] {e}")

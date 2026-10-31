@@ -113,11 +113,24 @@ node scripts/westock_client.js call data_quote '{"code":"sz301101"}'
 node scripts/westock_client.js call data_finance \
      '{"code":"sz301101","fields":"all","num":16}' > /tmp/fin.json
 node scripts/westock_client.js selftest          # 离线自检：不发请求、不读凭据
+
+# 取数同时留痕（v2.8.0 起）：每条返回都进同一个 raw-v1 采集包
+RAW="$PWD/.raw/sz301101-raw.json"
+mkdir -p "$(dirname "$RAW")"
+python3 scripts/collect_raw.py init "$RAW" --code sz301101
+python3 scripts/collect_raw.py run "$RAW" \
+     --tool data_quote --params '{"code":"sz301101"}'
+python3 scripts/collect_raw.py status "$RAW"
 ```
 
+`collect_raw.py run` 内部就是 `node westock_client.js call`，额外把 stdout 的原样 JSON
+（或 exit 3 时的纯文本）写进采集包；用 `data_*` connector 工具时，则把返回存文件后
+`collect_raw.py add --response-file`。最后 `save_report.py --raw` 把采集包并入交付 JSON。
+
 脚本做的事：找端点 → 找已授权账号 → 解密 token（只进内存）→ 走 MCP → 输出格式化 JSON。
-两个环境变量：`WORKBUDDY_HOME`（换 WorkBuddy 安装位置）、
-`WESTOCK_INTERVAL`（调用间隔毫秒，默认 1600，防限频）。
+三个环境变量：`WORKBUDDY_HOME`（换 WorkBuddy 安装位置）、
+`WESTOCK_INTERVAL`（调用间隔毫秒，默认 1600，防限频）、
+`WESTOCK_TIMEOUT`（单次 HTTP 超时毫秒，默认 60000；也可用 `call ... --timeout 20000`）。
 
 ---
 

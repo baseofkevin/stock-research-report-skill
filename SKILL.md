@@ -1,9 +1,9 @@
 ---
 name: stock-research-report
-version: 2.7.2
+version: 2.10.0
 schema_version: "2"
-updated: 2026-10-30 16:54
-description: 输入股票代码或名称，从腾讯自选股（WeStock）调取行情、季K线、三大报表、机构预期等数据，按用户私人笔记的解读范式完成企业分析，并输出美化布局的 HTML 企业信息解读报告。触发词：企业信息解读、个股分析、解读一下、股票分析、帮我看看 XXXX、财报解读、研报式个股分析。
+updated: 2026-10-31 15:30
+description: 输入股票代码或名称，从腾讯自选股（WeStock）调取行情、季K线、三大报表、机构预期等数据，按用户私人笔记的解读范式完成企业分析，输出美化布局的 HTML 企业信息解读报告；远程原始返回与 skill 计算结果合并保存为同名 JSON，三件套路径由 skill 根目录 env 配置。触发词：企业信息解读、个股分析、解读一下、股票分析、帮我看看 XXXX、财报解读、研报式个股分析。
 ---
 
 # 企业信息解读报告（个股分析 Skill）
@@ -24,6 +24,9 @@ description: 输入股票代码或名称，从腾讯自选股（WeStock）调取
 - `帮我看看 600519` / `分析下贵州茅台`
 - `给我出一份 中远海控 的企业信息解读报告`
 - `这只票怎么样？002519`
+
+> 同一家公司再次研究：先查 `env` 输出目录，已有报告就只更新 `.json/.html/.md` 三件套，
+> **不要重跑全量取数**；只有第一次研究的公司才完整获取信息。详见「两条路线」。
 
 **不支持港股、美股**。碰到 `00700`、`AAPL` 这类代码直接说明，不要用 A 股口径（扣非、合同负债、商誉）硬套。
 
@@ -85,18 +88,65 @@ node scripts/westock_client.js call data_finance '{"code":"sz301101","fields":"a
 
 ---
 
-## 第 0 步 · 先确认两件事（30 秒，但决定整篇是否正确）
+## 第 0 步 · 先确认三件事（决定走增量还是全量）
 
-1. **报告期**：调 `data_disclosure`，它会返回最新定期报告的 `reportEndDate`（报告期）
+1. **有没有研究过**：先查 `env` 输出目录，**不要一上来就调 16 个接口**。
+   ```bash
+   python3 scripts/report_cache.py lookup --code {code} --name {名称} --json
+   ```
+   - `cached: true` + `has_data: true` → 已研究过：默认走**增量更新**，复用旧 JSON 里的
+     `raw_data` 和计算结果，只更新 `.json` / `.html` / `.md` 三件套（见下方「两条路线」）。
+   - `cached: true` + `legacy_only: true` → 只有旧 HTML/MD、没有数据 JSON：先完整取数一次补齐 JSON。
+   - `cached: false` → 以前没研究过：走完整五步取数。
+   - 用户只给名称或 6 位数字也能查（`--name` / `--code 301101`），**不必先联网 `data_search`**。
+   - **只更新三件套时，下面第 2、3 条也不用重新确认**：沿用旧 JSON 的 `report_date` / `price_at`；
+     只有要刷新行情或新财报，才重新确认报告期和行情时点。
+2. **报告期**：调 `data_disclosure`，它会返回最新定期报告的 `reportEndDate`（报告期）
    和 `disclosureDate`（披露日）。**别把上一期当「最新一期」**，也别在披露前抢跑。
    报告里必须写明「{报告期} · {M 月 D 日}披露」。三季报集中在 10 月下旬、年报 3–4 月、中报 8 月。
-2. **行情时点**：盘中取价要写成 `YYYY-MM-DD HH:MM 盘中`（`meta.price_at`）。
+3. **行情时点**：盘中取价要写成 `YYYY-MM-DD HH:MM 盘中`（`meta.price_at`）。
    PE / PB / 历史分位 / PEG / 股息率 / 买卖区间**全部由这个价格推出**，
    收盘后要按收盘价复核一遍，两个时点的数字不一致时以收盘为准。
 
+**日期口径（别把报告日、行情时点、财报期、披露日混用）**：
+
+| 字段 / 数据 | 含义 |
+|---|---|
+| `meta.report_date` | 行情/报告基准日（`YYYY-MM-DD`），决定文件名里的 `{date}` 和估值末点 |
+| `meta.price_at` | 具体时点描述（`2026-10-30 收盘` / `2026-10-30 09:42 盘中`） |
+| `financials.latest.period` / `periods[-1]` | 财报报告期（如 `2026-09-30`） |
+| `data_disclosure.disclosureDate` | 法定预约披露日 |
+| `data_notice[].time` | 公告实际发布时间 |
+
+`disclosureDate` 与 `data_notice.time` 不一致时（例如预约 10-29、公告 10-28 盘后），
+**两个都写**：“公告 10-28 盘后发布，法定披露日 10-29”，不要只留一个。
+
 ---
 
-## 执行流程（五步，不要跳步）
+## 两条路线：已研究过 vs 第一次研究（v2.9.0 起）
+
+**先查缓存，再决定要不要取数。** 输出目录里已有这家公司的 JSON（按 `meta.code` 优先、
+`meta.name` 兜底匹配），就不要再跑一遍完整取数。
+
+| 情形 | 做法 | 命令 |
+|---|---|---|
+| **已研究过 · 只更新三件套**（不取新数） | 复用旧 JSON（含 `raw_data` 与计算结果），按 `env` 重写同名 `.json/.html/.md` | `python3 scripts/save_report.py --reuse --code {code}` |
+| **已研究过 · 要刷新行情/新财报** | 只补变化项（如 `data_disclosure` + `data_quote`；报告期变了再加 `data_finance`），把新返回追加进采集包；**不要重跑 16 类接口和 40~85 次月末采样** | `python3 scripts/save_report.py new.json --reuse --raw new-raw.json` |
+| **第一次研究** | 完整走五步：16 类接口 + 月末采样 + 跨源补数 + 计算 + 研判 | `python3 scripts/save_report.py data.json --raw full-raw.json` |
+
+- 增量更新时，旧 JSON 的 `raw_data` 会自动保留，新采集包会**追加**到 `calls`，不会覆盖旧证据。
+- 估值月末采样只在需要新增月份时补最近几个月，不全量重采；`data_kline` 同理，别为了一个季度重拉 40 根。
+- 旧报告没有 `raw_data`（v2.8.0 之前）时：先完整取数一次补齐，再改走增量。
+- **输出目录里只有旧 `.html/.md`、没有 JSON**（v2.8.0 之前的历史报告）：`lookup` 会返回
+  `legacy_only: true`，并从文件名/首行标题识别公司。这种报告**不能直接 `--reuse`**，
+  先按完整取数一次生成同名 JSON（旧 HTML/MD 保留，按新报告日命名，不覆盖旧文件），
+  之后就进入增量路线。
+- 同公司有多份历史 JSON 时，`report_cache.py` 按 `report_date` / 修改时间取最新；文件名带旧日期不影响识别。
+- 用户明确说「重新完整研究一遍」时，才允许走全量路线。
+
+---
+
+## 执行流程（首次研究走五步；已研究过的公司按上方增量路线，不要重跑）
 
 ### 第 1 步 · 取数
 
@@ -132,6 +182,25 @@ data_sector       → mode=search 后 constituent         （同业对比）
 data_score        → 诊股评分（只作交叉参考，不替代自己的判断）
 ```
 
+**护城河要 ≥5 年，16 期不够**：`num=16` 是 4 个年报。§9 要求至少 5 年，
+再补一次 `data_finance(fields="all", num=28)`（7 年）；或第一次就直接用 `num=28`。
+护城河表里的 `years` 与 `metrics.rows[].values` 必须按这次 28 期的年报铺开。
+
+**取数预算（计划值，不是硬上限）**：基础 16 + 东财 F10 2 + 护城河补数 1 + 同业 2~4 + 月末采样 N。
+服务端约 80 次触发限频，因此 **16 + 2 + 1 + 4 + N ≤ 75 → N ≤ 52**；
+若必须采 60 个月，就砍掉同业或分批跑（采样放最后，限频后退避 ≥60 秒再续）。
+
+**月末采样不要手写循环**，直接跑：
+
+```bash
+python3 scripts/sample_valuation.py --code {code} --raw "$RAW" --years 5
+# 先看会采哪些月份
+python3 scripts/sample_valuation.py --code {code} --raw "$RAW" --start 2021-11-01 --end 2026-10-31 --dry-run
+```
+
+脚本只补采集包里缺的月份；空返回自动回退前一个交易日，超时/限频分开退避，
+每成功一次立即落盘。**采集包必须先 `init`**；`collect_raw.py run/add` 默认不再静默新建。
+
 **另有三个补充动作，不属于 WeStock 接口，但同样必须做**：
 
 | 动作 | 做法 | 为什么必需 |
@@ -142,6 +211,7 @@ data_score        → 诊股评分（只作交叉参考，不替代自己的判�
 
 **为什么是 16 期（4 年），不是 8 期**：单季倒挤、同季同比、TTM 三件事同时要数据——
 算 2026Q3 单季要 2026 中报；算同季同比要 2025Q3 累计；算 TTM 要 2025 年报。
+**16 期只有 4 个年报，护城河 ≥5 年不够**；护城河另补一次 `num=28`（7 年报），不要拿 4 年报硬撑。
 8 期只够两年季报，连第 4 节「财务全景」的门槛（≥10 期）都到不了。
 
 **实测边界（2026-10-30，别踩）**
@@ -153,10 +223,11 @@ data_score        → 诊股评分（只作交叉参考，不替代自己的判�
 - 商誉字段是 **`GoodWill`**（大写 W），不是 `Goodwill`；`sh600315` 2026-09-30 为 14.55 亿、占归母净资产 19.57%。
   长期借款 **`LongtermLoan`** 也在（`sh600315` 3.20 亿）。某只股票缺 key 通常是该科目为 0/无，不是接口没有；
   拿不到就标 0 并在 `data_gaps` 注明「接口未返回，按 0 处理，待 F10 复核」。
-- 真正拿不到的只有：**短期借款单列 `ShortTermLoan`**（只有 `InterestBearDebt` 合计）、
-  存货的产成品/发出商品拆分、前五大客户集中度。短期借款可用
-  `InterestBearDebt − LongtermLoan − NonCurrentLiabilityIn1Year − LeaseLiabilities` 估算，取不到就用合计保守替代。
-  这三项走 `data_finsearch` 或年报附注，拿不到就标「不可评」。
+- **不保证返回**的字段：短期借款 `ShortTermLoan`（**常见但非必然**：000629 的
+  `fields="all"` 返回了 1.20 亿，600519/600315 未返回）、存货的产成品/发出商品拆分、
+  前五大客户集中度。未返回时短期借款可用
+  `InterestBearDebt − LongtermLoan − NonCurrentLiabilityIn1Year − LeaseLiabilities` 估算，
+  取不到就用合计保守替代；这三项走 `data_finsearch` 或年报附注，拿不到就标「不可评」。
 - `data_finance` 的 `_Q` 单季字段与倒挤一致，可互验；**仍以倒挤为准**，顺带当一致性检查。
 - 服务端限频：连续快速调用约 80 次后报 `服务限频`，之后需要退避 ≥60 秒。
   采样脚本必须断言返回是 JSON，否则会把限频当成「那天没数据」。
@@ -165,15 +236,51 @@ data_score        → 诊股评分（只作交叉参考，不替代自己的判�
 - 同一市场、支持 `codes` 的工具只调一次，逗号分隔。
 - `ok:false` 时**原样转述 message，禁止编造**。
 - **`ok:true` 但 `data` 是空数组/空对象 = 合法空返回**（例如 `data_shareholder` 对部分标的
-  三个列表全空）：**不要重试**（只会烧限频额度），该指标判「无数据」、写 `data_gaps`。
-- **返回不是 JSON 时是调用失败，不是「那天没数据」**：`JSON.parse` 失败要立刻停，
-  把原文（限频 / 参数错）报出来。`westock_client.js call` 此时以 exit 3 退出；
-  非 JSON 的典型例子：`data_sector` 漏传 `query` → `请提供搜索关键词`。
+  三个列表全空、`data_dividend` 返回 `{"ok":true,"data":{}}`）：**不要重试**（只会烧限频额度），
+  该指标判「无数据」、写 `data_gaps`。分红空对象还要用 `data_quote.dividend_ratio_ttm`
+  交叉判断是「零分红」还是「无数据」，别直接写 0。
+- **返回不是 JSON 要分两种**：
+  - **③a 调用失败**：限频 / 参数错 / 鉴权失败 / 工具不存在 → 立刻停或退避重试，保留原文；
+  - **③b 文本形式的「业务无数据」**：`未找到…` / `暂无…` / `无数据`（如
+    `data_consensus` 返回 `未找到一致预期数据`）→ 按合法空返回处理，**不重试**，
+    写 `data_gaps`，不要当成参数写错。
+  `westock_client.js call` 对纯文本统一 exit 3，所以要看原文语义再分类。
 - 接口拿不到的字段，先同源替代（consensus → 动态PE，rating → 反推预测净利），
   再用 `data_report` / `data_news` 的文字口径；**仍没有就写「暂无披露」，判定置为「无数据」**。
   **绝对不能用训练记忆或常识补具体数字。**
-- **把每一条原始返回存成文件**（`{code}-raw-{YYYYMMDD}.json`），
-  报告是可复算的，不是一次性聊天产物。
+- **把每一条原始返回都收进同一个采集包**，最后由 `save_report.py` 并入交付 JSON 的
+  `raw_data` 字段；报告是可复算的，不是一次性聊天产物。**不要再散成多个
+  `{code}-raw-{YYYYMMDD}.json`，也不要另起「数据源 JSON」的名字**（见下方「原始返回怎么留」）。
+
+**原始返回怎么留（v2.8.0 起，硬要求）**
+
+WeStock 的 `data_*`、月末采样的每一次 `data_quote`、东财 F10 补数、网页补数，
+**全部进同一个 `raw-v1` 采集包**：
+
+```bash
+RAW="${PWD}/.raw/{code}-raw.json"
+mkdir -p "$(dirname "$RAW")"
+python3 scripts/collect_raw.py init "$RAW" --code {code}
+
+# 走脚本取数：run 会调 westock_client.js，并把完整返回写进采集包（推荐）
+python3 scripts/collect_raw.py run "$RAW" --tool data_quote --params '{"code":"{code}"}'
+
+# 走 data_* connector 工具：把返回原样存成文件，再 add
+python3 scripts/collect_raw.py add "$RAW" --tool data_finance \
+  --params '{"code":"{code}","fields":"all","num":16}' --response-file /tmp/finance.json
+
+# 东财 F10 / 网页补数同样留痕
+python3 scripts/collect_raw.py add "$RAW" --source eastmoney \
+  --tool RPT_F10_FN_MAINOP --url "$F10_URL" --response-file /tmp/mainop.json
+
+python3 scripts/collect_raw.py status "$RAW"
+```
+
+- **`ok:false` 也要记**：`response` 原样保留；非 JSON（限频原文、参数错）用
+  `--text` 或 `--response-file` 记录成 `raw_text`，不能丢。
+- 月末采样的 40~85 次 `data_quote` 也逐条进 `calls`；`collect_raw.py run` 沿用客户端的
+  1.6 秒间隔，**不要自己并发**。
+- 采集包只是临时中转；**最终只交一个 JSON**：根节点是计算结果，`raw_data` 是原始返回。
 
 ### 第 2 步 · 计算
 
@@ -274,15 +381,38 @@ data_score        → 诊股评分（只作交叉参考，不替代自己的判�
 
 ### 第 5 步 · 出报告
 
-把第 2–4 步的结果填进 JSON，**先校验、再渲染**，HTML 与 Markdown 两个格式都要出：
+把第 2–4 步的结果填进 JSON，**先校验、再合并原始数据、一次写出三件套**：
 
 ```bash
 S=<skill目录>/scripts
-python3 $S/validate.py       data.json          # ① 结构+算术自检，必须 0 error
-python3 $S/render_report.py  data.json -o 报告.html
-python3 $S/render_md.py      data.json -o 报告.md
-python3 $S/lint_encoding.py  报告.html 报告.md   # ② 产物编码自检，必须 0 error
+RAW="${PWD}/.raw/<code>-raw.json"         # 第 1 步的采集包（跨命令持久）
+
+python3 $S/validate.py data.json         # ① 结构+算术自检，必须 0 error
+python3 $S/save_report.py data.json --raw "$RAW"
+# ② 合并 raw_data → 再次校验（含 raw_data 闸门）→ 按 env 写 .json/.html/.md
+#    三个文件主名完全相同，只是后缀不同；终端会打印三个绝对路径
+
+python3 $S/lint_encoding.py "<save_report 打印的 .html 路径>" "<... .md 路径>"
+# ③ 产物编码自检，必须 0 error
 ```
+
+`save_report.py` 是正式交付入口：它从 skill 根目录的 `env` 读 `REPORT_OUTPUT_DIR`，
+写 `{basename}.json` / `.html` / `.md`；JSON 根节点是计算结果、`raw_data` 是远程原始返回。
+`render_report.py` / `render_md.py` 仍可单独用，但**只有排障时才手写 `-o`**——
+正式交付不要绕过 env，否则三个文件会散在不同目录。
+
+**已研究过的公司不要重跑第 1 步**：
+
+```bash
+# 只更新三件套（复用旧 JSON，不取新数）
+python3 $S/save_report.py --reuse --code {code}
+
+# 补了增量数据（如新行情 / 新财报）后更新：旧 raw_data 自动保留，新返回追加
+python3 $S/save_report.py new.json --reuse --raw new-raw.json
+```
+
+`--reuse` 会按 `meta.code`（6 位数字也认）在 `env` 输出目录里找最新旧报告；
+找不到就报错并提示走完整取数。**第一次研究不要加 `--reuse`**。
 
 **`lint_encoding.py` 的判定分两级**：`[error]` 全小写/怪拼的拉丁串 = 必须改；
 `[warn]` CamelCase / 首字母大写单词 = 大概率是品牌名或产品代号，人工确认即可，不算失败。
@@ -306,14 +436,14 @@ python3 evals/run.py               # 回归用例 + 上面这一项，一起跑
 `data_xxx`、字段名拼错、`§` 编号指向空章节、骨架声明的 JSON 键渲染器根本没读。
 
 **JSON 字段清单**（v2；字段大多可省略，但 v2 的八节必需块缺了会直接报错。
-完整示例见 `scripts/sample.json`，那份示例可直接再渲染）：
+完整示例见 `scripts/sample.json`，那份示例可直接再渲染；`raw_data` 结构见 `scripts/sample-raw.json`）：
 
 | 键 | 内容 | 对应报告区块 |
 |---|---|---|
 | `schema_version` | 固定 `"2"`。v1（trends/latest/balance 三块）仍能渲染，但会丢掉整个「财务全景」 | — |
-| `meta` | name / code / tagline / price / **price_at** / change_pct / chg_note / market_cap / industry / report_date | 顶部横幅 + 页脚时点 |
+| `meta` | name / code / tagline / price / **price_at** / change_pct / chg_note / market_cap / **cap_note** / industry / report_date。`report_date` 是**行情/报告基准日**（不是财报报告期），`cap_note` 写市值单位与股本口径（如「亿元　总股本 92.91 亿股」） | 顶部横幅 + 页脚时点 |
 | `verdict` | stance / level(good·mid·bad·watch) / headline / summary / tags[] | 结论卡 |
-| `price` | records[]（历史区间）/ chart_data[{label,value}] / comment | 一、股价位置 + SVG 走势图 |
+| `price` | `records[{name, range, note}]`（历史区间表，**不是 label/value**）/ `chart_data[{label,value}]` / `chart_title` / `comment` | 一、股价位置 + SVG 走势图 |
 | `core_metrics` | [{label, value, note, flag(ok·warn·bad)}]，**v2 至少 10 项** | 二、主要指标初步研判 |
 | `core_summary` | 字符串：二节收尾的一句初步判断（**v2 必填**，≥8 字） | 二、指标卡之后 |
 | `business` | intro / segments[{name,rev_pct,margin,comment}] / moat（**对象，见下行**）/ policy / upstream / downstream | 三、生意本身 |
@@ -327,6 +457,8 @@ python3 evals/run.py               # 回归用例 + 上面这一项，一起跑
 | `scorecard` | steps[{no,name,state(pass·warn·fail·na),**state_text**,conclusion}] / items[{dim,value,weight}] / total / total_note。**拿不到数据的项保留 16 行、写 `value: null`（不可评）**，渲染时画灰条、自动从分母剔除并算出归一化得分率。`total` 是**展示字符串，不是数字**：格式 `+得分 / 满分 = 得分率%`，实例 `47 / 66（得分率 71.2%）`（`+25 / 66 = 37.9%` 也合法）；数值真源是 `items[].value × weight`，`total` 只是给人看、给校验器对账的**冗余表达**——写成纯数字 `25` 会被 `validate.py` 判「格式无法解析」，括号里得分率与实算差 >0.2pct 也会报错 | 六、七步研判 + 评分条 |
 | `conclusion` | paragraphs[] / watchlist[] / triggers[] | 八、综合研判 + 跟踪清单（编号按实际节数自动生成） |
 | `sources` | [{name, detail}] | 数据来源 |
+| `raw_data` | 远程原始返回包：`schema`(raw-v1) / `code` / `generated_at` / `call_count` / `calls[{source,tool,params,at,ok,response|raw_text}]`。由 `collect_raw.py` 采集、`save_report.py` 合并；**交付 JSON 必须有**，渲染器不读 | 不单独渲染（数据可复算凭证） |
+| `_data_package` | 合并说明：`saved_at` / `basename` / `output_dir` / `raw_data` 键名。由 `save_report.py` 自动写 | 不渲染 |
 | `charts_title` / `redflags_title` / `scorecard_title` / `conclusion_title` | 只覆盖标题文字，不覆盖编号；编号由渲染器按实际存在的节连续生成。`charts_title` 推荐放在 `financials.charts_title`（顶层同名键也兼容） | 各区块标题 |
 
 **`financials` 子字段**（把旧版的 trends / latest / balance 三块合成一整块）：
@@ -336,9 +468,9 @@ python3 evals/run.py               # 回归用例 + 上面这一项，一起跑
 | `title` / `lead` | 标题 + 导读（说明数据来源、期数、口径与反推方法） |
 | `periods` | 主表的期标签，**至少覆盖最近 2 年的全部季报**（10 期起，接口给到 16 期就用满） |
 | `quarterly_title` / `quarterly[]` / `quarterly_note` | 单季主表：每行 {name, values[]}，值与 periods 严格等长，行数建议 16~20 |
-| `charts[]` | 每张图：{title, labels[], series[{name,type:bar·line,axis:l·r,color,values[]}], unit_l, unit_r, height, note}。`labels` 可省（默认等于 periods），**但 `values` 必须是纯数字**——带 `%` 或 `亿` 的字符串画不出来，图会整块消失 |
-| `yoy` | {title, headers[], series[{name,values[]}], note} —— 同季同比对照，这是这类公司唯一正确的读法 |
-| `cumulative` | {title, headers[], series[], note} —— 年报 / 中报累计口径的长镜头 |
+| `charts[]` | 每张图：{title, labels[], series[{name,type:bar·line,axis:l·r,color,values[]}], unit_l, unit_r, height, note}。`labels` 可省（默认等于 periods）；**年度长镜头图可以给 7 年这种更短的 labels，只要求该图 `series[].values` 与它自己的 labels 等长**，校验器不再拿它跟 periods 比。**`values` 必须是纯数字**——带 `%` 或 `亿` 的字符串画不出来，图会整块消失 |
+| `yoy` | {title, headers[], first_col?, series[{name,values[]}], note} —— 同季同比对照。**`headers` 只放数据列**，首列名用 `first_col`（默认「对照项」），`values` 长度必须等于 `headers` |
+| `cumulative` | {title, headers[], first_col?, series[], note} —— 年报 / 中报累计口径的长镜头；`headers` 同样只放数据列，首列默认「指标」 |
 | `latest` | {title, period, comment, items[{label,value,yoy,note}], signals[{name,state,result,reason}]} —— 最新一期解读 + 三项改善信号 |
 | `balance` | {title, comment, items[{label,value,note}], risks[{name,value,level,threshold}]} —— 资产负债明细 + 四项安全判定 |
 | `insights_title` / `insights[]` | 跨年趋势归纳：每张卡 {tag, kind(ok·warn·bad), title, points[]}，**必须覆盖产品与价格、管理层口径（研发/费用）、营运资本、财务策略、现金流质量、股东回报、阅读方法等维度** |
@@ -371,8 +503,26 @@ python3 evals/run.py               # 回归用例 + 上面这一项，一起跑
 
 ## 输出与交付
 
-- 文件名建议：`{股票名称}-企业信息解读-{YYYYMMDD}.html` 与同名 `.md`，**两个都要交付**；
-  数据源 JSON 一并留下（`{股票名称}-数据源-{YYYYMMDD}.json`），保证报告可复算。
+**保存路径只由 skill 根目录的 `env` 决定**，不要写死在命令行或数据 JSON 里：
+
+```bash
+# /home/kevin/.workbuddy/skills/stock-research-report/env（UTF-8）
+REPORT_OUTPUT_DIR=~/企业研究报告
+REPORT_BASENAME_TEMPLATE={name}-企业信息解读-{date}
+```
+
+- `REPORT_OUTPUT_DIR`：三件套保存目录。支持**中文、空格**、`~`、`$HOME`、绝对路径；
+  相对路径以 **skill 目录**为基准。改完即生效，不用改脚本；留空则回退到 `~/企业研究报告`。
+- `REPORT_BASENAME_TEMPLATE`：三个文件共用的主文件名；占位符 `{name}` / `{code}` / `{date}`。
+- **三个文件同名不同后缀**：`{basename}.json`、`{basename}.html`、`{basename}.md`；
+  例如 `贵州茅台-企业信息解读-20261031.json` / `.html` / `.md`，三个都要交付。
+- `.json` 是**唯一的数据交付文件**：根节点 = skill 计算/研判结果；`raw_data` = 远程原始返回；
+  `_data_package` = 打包说明。不再另出「数据源 JSON」。
+- **重复研究同一家公司时，输出目录里的旧 JSON 就是缓存**：先跑
+  `report_cache.py lookup --code {code}`，命中就加 `save_report.py --reuse` 只更新三件套；
+  只有新公司才完整取数。缓存按 `meta.code` / `meta.name` 识别，和文件名里的日期无关。
+  只有旧 HTML/MD 时 `has_data: false`，需先完整取数一次补齐 JSON（见「两条路线」）。
+- 想先看会存到哪：`python3 scripts/report_paths.py --data data.json`。
 - 交付时附一句话核心结论（stance + 最重要的一个理由），不要复述全文。
 - **免责声明必须保留**：报告基于公开数据整理，仅供参考，不构成投资建议。
 
@@ -398,12 +548,27 @@ python3 evals/run.py               # 回归用例 + 上面这一项，一起跑
     （301087 的经营现金流 −55.2% 就一条都没中），不写理由读者分不清「查过了」和「没查」。
 15. 为了让 `valuation.current` 通过校验，往 series 里硬塞一个非当月点 → 先看日期：
     末点比报告日早是**允许**的（只提醒），只有同日两点不一致才是错。塞点会污染分位口径。
+16. 原始返回散成一堆文件、或另起 `-数据源-` 文件名 → 必须先进 `collect_raw.py` 的采集包，
+    最后由 `save_report.py` 并进**同名 JSON** 的 `raw_data`。
+17. 忽略 `env` 直接 `-o ./报告.html` → 正式交付一律走 `save_report.py`；`-o` 只用于排障。
+18. 只交 HTML/MD 不交 JSON，或三个文件主名不一样 → 用 `save_report.py` 一次写出，
+    三件套必须**同目录、同主名、只差后缀**。
+19. 已研究过的公司又跑完整 16 类接口 → 先 `report_cache.py lookup`；`cached: true` 就加
+    `save_report.py --reuse`，只更新三件套，别重拉 40~85 次月末采样。
+20. 已研究过却新建到别的目录、或另起一个主名 → 缓存按 `meta.code` 能识别日期不同的旧文件，
+    但交付目录要保持 `env` 的那一个，避免同一公司散成多份。
 
 ---
 
 ## 变更记录
 
-见 `CHANGELOG.md`。**v2.7.2 起：取数三态（`ok:false` / `ok:true` 空返回 / 非 JSON）、
+见 `CHANGELOG.md`。**v2.9.0 起（v2.10.0 继续沿用）：先查 `env` 输出目录的旧报告——已研究过的公司用
+`save_report.py --reuse` 只更新三件套（复用旧 `raw_data`），没研究过的公司才完整取数；
+`report_cache.py` 按 `meta.code` / `meta.name` 识别缓存。**
+**v2.8.0 起：输出目录改由 skill 根目录 `env` 的 `REPORT_OUTPUT_DIR`
+配置（支持中文/空格/相对路径）；新增 `collect_raw.py` 采集远程原始返回，`save_report.py`
+把它并入交付 JSON 的 `raw_data`，并与 HTML/Markdown 一起按同名主文件名写出。**
+**v2.7.2 起：取数三态（`ok:false` / `ok:true` 空返回 / 非 JSON）、
 `redflags_note` 正式登记、`valuation.series` 末点改为按日期分级校验、`lint_encoding` 白名单外置
 并分 `error` / `warn` 两级、主营构成跨源模板（`RPT_F10_FN_MAINOP`）。**
 **v2.5.0 起：明确定义「报告骨架（八节）」并把六段式映射过去**——

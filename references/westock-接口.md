@@ -31,7 +31,7 @@
 | 4 | `data_kline` | `code`, `period=season`, `limit=40`, `fq=qfq` | **季 K 线**：判断股价历史位置（一节） |
 | 5 | `data_kline` | `code`, `period=year`, `limit=10`, `fq=qfq` | 年 K：补长周期高低点 |
 | 6 | `data_profile` | `code` | 主营、行业、股本、上市日期（**不含估值**，别指望它给 PE/PB） |
-| 7 | `data_finance` | `code`, `fields="all"`, `num=16` | **三大报表全字段**，见第三节 |
+| 7 | `data_finance` | `code`, `fields="all"`, `num=16`（护城河另补 `num=28`） | **三大报表全字段**，见第三节 |
 | 8 | `data_consensus` | `code` | `targetPrice` + 未来三年 `netProfit`/`eps`/`pe`（动态 PE 的来源） |
 | 9 | `data_rating` | `code` | 机构评级 |
 | 10 | `data_dividend` | `code` | 分红送转序列 |
@@ -50,6 +50,45 @@
 **这张表之外还有三件事必须做**：① 第七节的月末采样（同上第 3 行 `data_quote` 加 `date`）；
 ② 第三节护城河要的资本支出，见第八节（东财 F10，WeStock 没有这个科目）；
 ③ 分部表缺主营构成时的跨源补数，见 8b（同样是东财 F10）。
+
+### 2.1 原始返回一律进同一个采集包（v2.8.0 起）
+
+上表每一次调用、每个月的 `data_quote(date=...)` 采样、每条东财 F10 / 网页补数，
+都要把**完整返回原文**写进同一个 `raw-v1` 采集包；最后由 `save_report.py` 并入交付
+JSON 的 `raw_data`。不要再拆成 `{code}-raw-{YYYYMMDD}.json` 多个文件，也不要另起
+「数据源 JSON」的文件名。
+
+```bash
+RAW="$PWD/.raw/sz301101-raw.json"
+mkdir -p "$(dirname "$RAW")"
+python3 scripts/collect_raw.py init "$RAW" --code sz301101
+
+# 走脚本：run 自动调 westock_client.js 并记录完整返回（推荐）
+python3 scripts/collect_raw.py run "$RAW" --tool data_quote --params '{"code":"sz301101"}'
+python3 scripts/collect_raw.py run "$RAW" --tool data_finance \
+  --params '{"code":"sz301101","fields":"all","num":16}'
+
+# 走 data_* connector 工具：把工具返回原样落文件，再 add
+python3 scripts/collect_raw.py add "$RAW" --tool data_sector \
+  --params '{"code":"sz301101","mode":"constituent"}' --response-file /tmp/sector.json
+
+# 东财 F10（资本支出 / 主营构成）
+python3 scripts/collect_raw.py add "$RAW" --source eastmoney \
+  --tool RPT_F10_FN_MAINOP --url "$F10_URL" --response-file /tmp/mainop.json
+
+python3 scripts/collect_raw.py status "$RAW"
+```
+
+- `ok:false` 的返回同样原样记（`response.ok=false` + `message`），**不要因为它失败就丢掉**。
+- `run` / `add` 找不到采集包时**默认报错**，不会静默新建；确实要新建空包加 `--create`
+  （更推荐先 `init`）。`status` 对不存在的包会直接提示「请先 init」。
+- 限频 / 参数错导致返回纯文本时，用 `--text`（或 `--response-file` 存原文）记成
+  `raw_text`；这正是排查「到底是被限频还是那天没数据」的证据。
+- 采集包只是临时中转，**交付时只交一个 JSON**（根节点=计算结果，`raw_data`=原始返回）。
+- 最小结构示例见 `scripts/sample-raw.json`。
+- **已经研究过的公司不要重跑本节全表**：先 `scripts/report_cache.py lookup --code …`；
+  命中就只补需要刷新的那一两项，再 `save_report.py --reuse`（见 SKILL「两条路线」）。
+
 
 ---
 
@@ -104,8 +143,9 @@ EndDate  InfoPublDate  date  _date
   不要再写「`Goodwill` 不存在」——大小写写错会误判成没有商誉。
 - **长期借款**：字段是 **`LongtermLoan`**，`sh600315` 为 3.20 亿；未返回时按 0/无处理。
 - **一年内到期非流动负债**：`NonCurrentLiabilityIn1Year` 有值（`sh600315` 1.26 亿、`sz301101` 212 万）。
-- **短期借款**：确实没有单列 `ShortTermLoan`，只有 `InterestBearDebt`（合计）；
-  短期部分用 `InterestBearDebt − LongtermLoan − NonCurrentLiabilityIn1Year − LeaseLiabilities` 估算，
+- **短期借款**：`ShortTermLoan` **常见但非必然**——`sz000629` 的 `fields="all"` 返回了
+  1.20 亿，`sh600519`/`sh600315` 未返回；此时用 `InterestBearDebt`（合计）减
+  `LongtermLoan − NonCurrentLiabilityIn1Year − LeaseLiabilities` 估算，
   或直接用合计做保守替代，并在报告里注明。
 - **产成品 / 发出商品**等存货明细：没有，需 F10/附注。
 
@@ -146,11 +186,13 @@ EndDate  InfoPublDate  date  _date
 |---|---|---|---|
 | ① 业务失败 | `{"ok":false,"message":"…"}` | `ok === false` | **原样转述 message**，禁止编造；该指标「无数据」 |
 | ② 成功但无数据 | `{"ok":true,"data":{"sz301087":{"top10Shareholders":[]}}}` | `ok === true` 且列表/对象为空 | **不重试**（重试只会烧限频额度）：该指标「无数据」，写 `data_gaps`，打分卡 `value: null` |
-| ③ 不是 JSON | `请提供搜索关键词`、`查询财报异常：… 服务限频` | `JSON.parse` 失败 | 这是**调用失败**（参数错 / 限频 / 工具不存在），不是「那天没数据」；必须非零退出并保留原文 |
+| ③a 不是 JSON（真失败） | `请提供搜索关键词`、`查询财报异常：… 服务限频`、鉴权失败 | `JSON.parse` 失败，且原文是参数/限频/鉴权错误 | **调用失败**：必须非零退出或退避重试，保留原文；不能当「那天没数据」 |
+| ③b 不是 JSON（业务无数据） | `未找到一致预期数据`、`暂无…`、`无数据` | `JSON.parse` 失败，但语义是「没有这个数据」 | **合法空返回**：不重试，写 `data_gaps`，打分卡 `value: null`；与 ③a 分开 |
 
 形态 ③ 的实测例子（2026-10-30）：`data_sector` 的 `mode=search` **漏传 `query`** 时，
 返回的就是一句 `请提供搜索关键词`；`mode=constituent` 传错参数时返回 `成分股查询需要 code 或 codes`。
-两者都是**参数问题**，正确写法见 6.5。
+两者都是**参数问题**，正确写法见 6.5。`data_consensus` 对 `sz000629` 返回
+`未找到一致预期数据`，属于 ③b，不要重试。
 
 > 脚本铁律（对应形态 ③）：解析后必须断言 `ok === true`，否则 `exit` 非 0。
 > `westock_client.js` 的 `call` 在工具返回纯文本时以 **exit 3** 退出，并把原文同时写 stderr
@@ -170,6 +212,7 @@ EndDate  InfoPublDate  date  _date
 | 工具 | 现象 | 实测 | 处理 |
 |---|---|---|---|
 | `data_shareholder` | 三个列表全空 | `sz301087`（可孚医疗）返回 `shareholderNum: []` / `top10Shareholders: []` / `top10FloatShareholders: []`，`ok: true` | `business.ownership` 留空，`data_gaps` 记一条「股东结构未返回（接口合法空返回）」，不重试 |
+| `data_dividend` | `{"ok":true,"data":{}}` | `sz000629` 近 5 年返回空对象 | 再看 `data_quote.dividend_ratio_ttm`：为 0 → 按「零分红」处理；非 0 或取不到 → 按「无分红数据」写 `data_gaps`，不要武断判零分红 |
 
 ---
 
@@ -177,7 +220,8 @@ EndDate  InfoPublDate  date  _date
 
 ### 6.1 一次典型返回的规模
 
-`data_finance(code, fields="all", num=16)` 返回 16 期 × 三大报表：
+`data_finance(code, fields="all", num=16)` 返回 16 期 × 三大报表（4 个年报）；
+护城河要 ≥5 年时再补一次 `num=28`（7 个年报）：
 利润表 58 字段、现金流量表 22 字段；资产负债表 **49 / 51 / 53 字段（301101 / 600315 / 600519）**。
 够算全部 14 章指标，不需要再拼其他接口。
 
@@ -249,6 +293,10 @@ node scripts/westock_client.js call data_sector \
 「同类公司」；概念清单（`concept_list_industry`）会把上下游一起圈进来，只适合写正文背景，
 不要拿它算同业中位数。
 
+**取不到申万二级时的降级规则**：有些行业（如钢铁）`mode=search` 只返回申万一级，
+没有 `industry_list_sw2`。此时用「申万一级成分股 + 主营构成重合度」人工挑 3~5 家，
+在报告里明确写「自选同业，不是板块中位数」，不要假装是申万二级口径。
+
 ---
 
 ## 七、历史估值分位：怎么搭、限频怎么躲
@@ -271,6 +319,22 @@ node scripts/westock_client.js call data_sector \
 | < 2 年 | 月末 | < 24 | 样本太少，**只写区间不给分位** |
 
 **不要**逐交易日采样（1200+ 次调用必然被限频，且对分位精度没有实质提升）。
+
+**取数预算**：基础 16 + 东财 F10 2 + 护城河补数 1 + 同业 2~4 + 采样 N。
+服务端约 80 次触发限频，计划值控制在 **16 + 2 + 1 + 4 + N ≤ 75 → N ≤ 52**；
+要采 60 个月就砍同业或分批跑。`data_quote` 支持 `codes` 批量，同业行情可一次拿；
+`data_finance` 是否支持 `codes` 未确认，别默认批量。
+
+**不要手写采样循环**，直接跑 `scripts/sample_valuation.py`：
+
+```bash
+python3 scripts/sample_valuation.py --code sz000629 --raw "$RAW" --years 5
+python3 scripts/sample_valuation.py --code sz000629 --raw "$RAW" \
+  --start 2021-11-01 --end 2026-10-31 --dry-run   # 只看待补月份
+```
+
+它从 raw 包读已有月份，只补缺失；空返回回退前一交易日，超时/限频分开退避，
+成功一条立即保存。采集包不存在时直接报错，不会静默新建。
 
 **分位算法**：`分位 = 低于当前值的样本数 ÷ 有效样本数`；只统计 `pe_ratio > 0` 的样本
 （亏损期 PE 为负或空，混进去会把分位算低）。报告里必须写出样本区间与点数，
@@ -367,7 +431,7 @@ data_disclosure → 报告期 + 披露日
 data_quote      → 行情 + 三种 PE + PB（date= 可查历史，用于自建分位）
 data_kline      → 季K/年K（period=season/year, fq=qfq）
 data_profile    → 主营/行业/股本/上市日（没有估值）
-data_finance    → fields="all", num=16（三大报表 16 期全字段）
+data_finance    → fields="all", num=16（基础 16 期；护城河另补 num=28）
 data_consensus  → targetPrice + 三年预测（动态 PE）
 data_rating     → 评级    data_dividend → 分红
 data_shareholder→ 股东    data_risk → 质押/解禁/诉讼

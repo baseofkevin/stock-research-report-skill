@@ -30,6 +30,7 @@ DOCS = ["SKILL.md", "CHANGELOG.md",
 
 sys.path.insert(0, str(SKILL / "scripts"))
 from render_report import SECTION_TITLES  # noqa: E402
+import report_paths  # noqa: E402
 
 # 文档里合法出现、但不是接口工具的串（JSON 键、我们自己的字段名）
 NOT_A_TOOL = {
@@ -129,6 +130,7 @@ FIELD_ALLOW = {
     "OAuth", "Bearer", "SHA256", "AES", "GCM", "HKDF",
     "AttributeError", "TypeError", "KeyError", "JSONDecodeError",
     "Goodwill",  # 文档里专门用来提醒「不是这个拼写」的反例
+    "ShortTermLoan",  # 常见但不保证返回，不能按「字段不存在」处理
 }
 
 # 这些字段确实可能不在接口里；只有在「不存在/不返回」语境里才放行。
@@ -363,6 +365,68 @@ def check_section_titles(docs: dict[str, str]) -> None:
         warn(f"解读范式 §二 缺这些节的小节标题：{sorted(set(skel) - set(fan_map))}")
 
 
+# --------------------------------- 10. 输出契约（env + 同名三件套 + raw_data）
+def check_output_contract(docs: dict[str, str]) -> None:
+    """v2.8.0 的交付约定：env 配路径、JSON 里有 raw_data、三件套同名。"""
+    env_path = SKILL / "env"
+    if not env_path.exists():
+        err("skill 根目录缺 `env`：输出目录必须可在本地修改")
+    else:
+        text = env_path.read_text(encoding="utf-8-sig")
+        if "REPORT_OUTPUT_DIR" not in text:
+            err("env 里缺 `REPORT_OUTPUT_DIR`：三件套保存目录没有可配置的真源")
+        try:
+            cfg = report_paths.load_config(env_path)
+        except Exception as e:                                # noqa: BLE001
+            err(f"env 解析失败：{e}")
+        else:
+            if not str(cfg.get("output_dir_raw") or "").strip():
+                err("env 的 `REPORT_OUTPUT_DIR` 为空，且没有回退值")
+            if not str(cfg.get("basename_template") or "").strip():
+                err("env 的 `REPORT_BASENAME_TEMPLATE` 为空")
+
+    for rel in ("scripts/report_paths.py", "scripts/raw_bundle.py",
+                "scripts/collect_raw.py", "scripts/save_report.py",
+                "scripts/report_cache.py", "scripts/sample_valuation.py",
+                "scripts/sample-raw.json"):
+        if not (SKILL / rel).exists():
+            err(f"输出契约缺少文件：{rel}")
+
+    skill = docs["SKILL.md"]
+    required = {
+        "REPORT_OUTPUT_DIR": "env 配置键",
+        "REPORT_BASENAME_TEMPLATE": "env 文件名模板",
+        "raw_data": "原始数据同存字段",
+        "collect_raw.py": "原始数据采集脚本",
+        "save_report.py": "三件套输出脚本",
+        "report_paths.py": "路径解析脚本",
+        "report_cache.py": "已研究公司缓存查询脚本",
+        "--reuse": "已研究公司的增量更新开关",
+        "sample_valuation.py": "月末采样脚本",
+    }
+    for needle, what in required.items():
+        if needle not in skill:
+            err(f"SKILL.md 没写 {what}「{needle}」——执行时不知道该按哪套约定交付")
+
+    save = read("scripts/save_report.py")
+    for needle in ('"raw_data"', "report_paths", "render_md", "validate",
+                   "report_cache", '"--reuse"'):
+        if needle not in save:
+            err(f"save_report.py 没引用 {needle}：三件套可能没有真正合并/校验/渲染")
+    sampler = read("scripts/sample_valuation.py")
+    for needle in ("月末采样", "data_quote", "raw_bundle", "dry-run"):
+        if needle not in sampler:
+            err(f"sample_valuation.py 没实现 {needle}：月末采样仍要手写")
+    cache = read("scripts/report_cache.py")
+    for needle in ("REPORT_OUTPUT_DIR", "latest_report", "normalize_code"):
+        if needle not in cache:
+            err(f"report_cache.py 没实现 {needle}：已研究公司的缓存识别不完整")
+    rp = read("scripts/report_paths.py")
+    for needle in ("REPORT_OUTPUT_DIR", "REPORT_BASENAME_TEMPLATE", "expanduser"):
+        if needle not in rp:
+            err(f"report_paths.py 没实现 {needle}：env 配置不可用")
+
+
 # ---------------------------------------------------------------- 快照处理
 def load_snapshot() -> dict:
     if SNAP.exists():
@@ -476,6 +540,7 @@ def main() -> int:
         ("JSON 键可达", lambda: check_json_keys(docs)),
         ("报告骨架", lambda: check_skeleton(docs)),
         ("节标题对账", lambda: check_section_titles(docs)),
+        ("输出契约", lambda: check_output_contract(docs)),
     ]
     for name, fn in checks:
         before = len(issues)

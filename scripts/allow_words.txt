@@ -51,3 +51,18 @@ jahwa
 # 股东姓名拼音（外籍/英文名股东会以纯拼音出现）
 minhong
 mao
+
+# 脚本子命令 / 交付流程词（文档里会直接写命令名）
+init
+
+# WeStock / 东财接口字段名（lowerCamel 会被当成可疑拉丁串）
+ratingCnt
+ratingIncCnt
+tradingAssets
+shortTermLoan
+goodWill
+interestBearDebt
+longtermLoan
+nonCurrentLiabilityIn1Year
+otherCurrentAssets
+totalAssets

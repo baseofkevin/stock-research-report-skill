@@ -5,7 +5,7 @@
 > 本目录下**任何文件**（`SKILL.md`、`references/`、`scripts/`、`evals/`、示例 JSON、模板与脚本）
 > 的改动，都必须留下**具体到时分**的修改时间，不再只写到日：
 >
-> - 版本标题写成 `## v2.8.0 — 2026-11-02 09:41（一句话说清改了什么）`；
+> - 版本标题写成 `## v2.8.1 — 2026-11-02 09:41（一句话说清改了什么）`；
 > - `SKILL.md` 的 `updated:` 同步写成 `2026-11-02 09:41`；
 > - 时间取改动完成时的本机时间（北京时间 UTC+8，24 小时制，`年-月-日 时:分`），
 >   同一分钟内的多次改动照实写同一时分，不许含糊成「上午 / 下午」；
@@ -13,6 +13,119 @@
 >
 > 下方 v2.7.2 – v2.3.0 的时分按 git 提交时间补登；更早的条目（v2.2.1 及以前）
 > 没有可靠的时分记录，保留到日。
+
+
+## v2.10.0 — 2026-10-31 15:30（修静默错列/丢说明；采集包不再静默新建；月末采样脚本化）
+
+把复盘里「不报错但产出错」的几类问题一起收口，并补上可复跑的采样脚本。
+
+**渲染不再静默丢内容**
+- `scripts/render_md.py` / `scripts/render_report.py`：`business.moat.metrics.judge`
+  写成字符串时按**一整条**渲染，不再逐字拆成 `- 五` / `- 年`；
+  `redflags_note` 在有命中项时也渲染在命中表之后（以前只在零命中时输出）。
+- `scripts/validate.py`：v2 的 `judge` 必须是对象，字符串直接报错（渲染器只做兼容）；
+  `financials.yoy/cumulative` 的 `series[].values` 必须与 `headers` 等长，错列报错；
+  `price.records` 必须用 `name/range/note`（`label/value` 报错）；删掉
+  「年度 7 年 labels ≠ 17 期 periods」的跨图误报，只保留 series 与本图 labels 比。
+
+**采集包安全**
+- `scripts/collect_raw.py`：`run/add` 找不到采集包**默认拒绝**，必须显式 `--create`
+  或先 `init`；`status/merge` 对缺失/坏 JSON 友好报错；失败摘要打印 `error` 首行
+  和原文首段；纯文本 `未找到/暂无/无数据` 标记 `no_data: true`，按合法空返回 exit 0，
+  不再和限频/参数错混在一起。
+- `scripts/westock_client.js`：新增 `--timeout`（1000~120000ms）和
+  `WESTOCK_TIMEOUT`，超时报错带秒数；默认仍是 60s。
+
+**月末采样**
+- 新增 `scripts/sample_valuation.py`：读 raw 包已有 `data_quote(date=...)` 按月补缺，
+  空返回回退前一交易日，超时/限频分开退避（5/15/45s、60s），成功一条立即落盘；
+  `--dry-run` 可先看要采哪些月份；采集包不存在直接报错。
+- 文档把 `/tmp` 采集包示例统一改成 `${PWD}/.raw/`，`.gitignore` 加 `.raw/`。
+
+**文档对账**
+- `SKILL.md` / `references/指标体系.md` / `references/westock-接口.md`：
+  护城河补 `num=28`、取数预算表、四态返回（业务空返回不重试）、`data_dividend {}` 规则、
+  日期口径表、`ShortTermLoan` 常见但非必然、申万二级缺失降级、示例数字标为历史快照、
+  经营性 PB 的 `TradingAssets` 上限口径、当年 FCF 待年报、排雷 #9 的 30% 阈值、
+  C1/C2 不临时加第 17 项；`ratingCnt` 等接口字段加入 `allow_words.txt`。
+
+**回归**
+- `evals/run.py` 新增「静默降级防护」：`judge` 字符串、表头错列、`price.records`、
+  命中后的 `redflags_note`、采集包缺失守卫、`sample_valuation --dry-run`。
+
+## v2.9.0 — 2026-10-31 14:38（已研究过的公司只更新三件套；新公司才完整取数）
+
+解决「同一家公司反复研究时把 16 类接口和 40~85 次月末采样全部重跑」的浪费，
+同时避免把「旧报告」误当「没研究过」。
+
+**缓存识别**
+- 新增 `scripts/report_cache.py`：扫描 `env` 的 `REPORT_OUTPUT_DIR` 顶层 `*.json`，
+  按 `meta.code`（优先，6 位数字也认）或 `meta.name` 匹配旧报告；返回最新一份的
+  JSON/HTML/MD 路径、报告日、行情时点、`raw_data` 条数、三件套是否齐全。
+  `lookup --json` 输出 `cached / count / latest / reports / hint`，
+  没找到时加 `--fail-if-missing` 可 exit 3，方便脚本按退出码分支。
+- 同公司多份历史文件按 `report_date` / 修改时间取最新；文件名带旧日期不影响识别。
+- 兼容 v2.8.0 之前只有 `.html/.md`、没有 JSON 的历史报告：按文件名
+  `名称-企业信息解读-YYYYMMDD` 和 Markdown 首行标题 `# 名称（sz123456）企业信息解读`
+  识别公司，返回 `legacy_only: true`；这种报告不能直接复用（缺 `raw_data`），
+  先完整取数一次补齐 JSON，之后才走增量。
+
+**增量更新**
+- `save_report.py` 新增 `--reuse` / `--code` / `--name`：
+  - `--reuse --code sz301101`（不给新 JSON）→ 直接读旧 JSON，按 env 重写同名三件套，
+    不联网、不重拉数据；
+  - `new.json --reuse` → 新 JSON 缺 `raw_data` 时自动从旧报告补；
+  - `new.json --reuse --raw new-raw.json` → 旧 `raw_data` 保留，新采集包追加进 `calls`；
+  - 找不到旧报告时 exit 4，并提示「第一次研究走完整取数」。
+- 位置参数 `json_path` 改为可选；校验、`_data_package`、三件套同名规则不变。
+
+**文档**
+- `SKILL.md` 第 0 步改为「先确认三件事（缓存 / 报告期 / 行情时点）」，
+  新增「两条路线：已研究过 vs 第一次研究」对照表；第 5 步补 `--reuse` 命令；
+  输出与交付补缓存说明；常见错误补 19–20 条（重复全量取数、同公司散成多份）。
+- `check_docs.py` 输出契约增加 `report_cache.py`、`--reuse` 对账；
+  `evals/run.py` 增加「保存后能查到缓存 / 复用模式不新增文件 / 新公司不误判」回归。
+
+
+## v2.8.0 — 2026-10-31 14:23（原始数据与计算结果合并为同名 JSON；输出目录改由 env 配置）
+
+这一版改的是**交付形态**，不动 16 项 / 25 条 / 满分 66 这些结构常量。
+
+**一个 JSON 同时装原始数据与计算结果**
+- 新增 `scripts/raw_bundle.py`：定义 `raw-v1` 采集包（`schema/code/created_at/calls[]`），
+  每条调用记录保留 `source / tool / params / at / ok / response|raw_text`，失败返回也原样留；
+  提供合并、统计、结构校验函数。
+- 新增 `scripts/collect_raw.py`：`init / add / run / status / merge` 五个子命令。
+  `run` 直接调 `westock_client.js call` 并把完整返回写进采集包；走 `data_*` connector
+  工具时用 `add --response-file` 留痕；东财 F10 / 网页补数用 `--source eastmoney --url`。
+- 新增 `scripts/save_report.py`：合并 `--raw` 采集包 → 调 `validate.py`（含 `raw_data` 闸门）
+  → 一次写出 `{basename}.json` / `.html` / `.md` 三件套。JSON 根节点是计算结果，
+  `raw_data` 是远程原始返回，`_data_package` 是打包说明（保存时间 / 主名 / 目录）。
+- `scripts/sample-raw.json`：`raw-v1` 最小示例，带 WeStock 与东财 F10 各一条。
+
+**输出路径改由 env 配置**
+- 新增 skill 根目录 `env`（UTF-8）：`REPORT_OUTPUT_DIR` 决定三件套保存目录，
+  `REPORT_BASENAME_TEMPLATE` 决定三个文件共用的主文件名（`{name}` / `{code}` / `{date}`）。
+  路径支持中文、空格、`~`、`$HOME`；相对路径以 skill 目录为基准。
+- 新增 `scripts/report_paths.py`：env 解析（BOM、引号、行尾注释、`export` 前缀）、
+  中文/空格路径解析、非法文件名字符清洗、三件套同名路径生成；也可用
+  `python3 scripts/report_paths.py --data data.json` 先查看会存到哪。
+
+**脚本回归**
+- `render_report.py` / `render_md.py`：省略 `-o` 时不再写到当前目录 `report.html/md`，
+  而是按 env 目录 + `meta.name/code/report_date` 生成同名文件；新增 `--env-file` /
+  `--out-dir` 仅供排障覆盖。`-o` 仍可用，但正式交付走 `save_report.py`。
+- `validate.py`：抽出 `check_data()` 供内存校验；新增 `--require-raw`，
+  `save_report.py` 默认打开，缺 `raw_data` / `calls` 为空 / 调用记录结构不全都报错。
+  历史样例不带 raw_data 时默认不强制，避免旧用例全红。
+
+**文档**
+- `SKILL.md`：第 1 步新增「原始返回怎么留」采集命令；第 5 步改为
+  `validate.py` → `save_report.py --raw` → `lint_encoding.py`；JSON 字段表登记
+  `raw_data` / `_data_package`；「输出与交付」重写为 env 配置说明 + 同名三件套约定；
+  常见错误补 16–18 条（散落 raw、绕过 env、三件套不同名）。
+- `references/westock-接口.md` 新增 §2.1 采集包要求；`references/接入WeStock.md` §四
+  补 `collect_raw.py` 用法；`CHANGELOG.md` 本条。
 
 
 ## v2.7.2 — 2026-10-30 13:22（按 301087 实测反馈收口：取数三态、排雷出口、估值末端点）

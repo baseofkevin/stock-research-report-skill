@@ -18,6 +18,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from report_paths import output_paths  # noqa: E402
+
 # ---------------------------------------------------------------- 样式
 
 CSS = """
@@ -657,6 +660,8 @@ def _moat_block(m) -> str:
         out.append("<h4>① 五个财务体征，拉长看</h4>")
         out.append(_matrix_table(years, rows, first_col="指标", colorize=False))
         judge = mt.get("judge") or {}
+        if isinstance(judge, str):
+            judge = [judge]                 # 旧写法兼容：一句话只出一条，不逐字拆
         if judge:
             out.append("<ul class='watch moat-judge'>")
             for v in (judge.values() if isinstance(judge, dict) else judge):
@@ -1277,6 +1282,8 @@ def sec_redflags(items: list[dict], title: str = "排雷扫描", note: str = "")
                 f"<td class='muted'>{esc(r.get('evidence'))}</td></tr>"
             )
         out.append("</tbody></table></div>")
+        if note:
+            out.append(f"<p class='muted'><strong>补充：</strong>{esc(note)}</p>")
     out.append("</section>")
     return "".join(out)
 
@@ -1518,7 +1525,9 @@ def render(data: dict) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description="个股分析 JSON → 美化 HTML 报告")
     ap.add_argument("json_path", help="数据 JSON 文件路径")
-    ap.add_argument("-o", "--out", help="输出 HTML 路径，默认与 JSON 同目录 report.html")
+    ap.add_argument("-o", "--out", help="输出 HTML 路径；省略时按 env 配置的目录 + 同名主文件名")
+    ap.add_argument("--env-file", help="临时指定 env 文件（默认 skill 根目录/env）")
+    ap.add_argument("--out-dir", help="临时覆盖输出目录（不改 env）")
     args = ap.parse_args()
 
     src = Path(args.json_path).expanduser()
@@ -1531,7 +1540,10 @@ def main() -> int:
         print(f"错误：JSON 解析失败 {e}", file=sys.stderr)
         return 1
 
-    out = Path(args.out).expanduser() if args.out else src.with_name("report.html")
+    if args.out:
+        out = Path(args.out).expanduser()
+    else:
+        out = output_paths(data, out_dir=args.out_dir, env_file=args.env_file)["html"]
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render(data), encoding="utf-8")
     print(f"已生成：{out}  （{out.stat().st_size / 1024:.1f} KB）")

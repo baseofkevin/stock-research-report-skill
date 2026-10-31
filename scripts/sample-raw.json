@@ -1,0 +1,72 @@
+{
+  "_note": "raw-v1 采集包的最小示例。真实使用时由 collect_raw.py 的 init / run / add 子命令生成，每条都是接口原样返回，不做裁剪。",
+  "schema": "raw-v1",
+  "code": "sz301101",
+  "created_at": "2026-10-28 09:40:00",
+  "updated_at": "2026-10-28 09:42:10",
+  "calls": [
+    {
+      "seq": 1,
+      "source": "westock",
+      "tool": "data_search",
+      "params": {
+        "query": "明月镜片"
+      },
+      "at": "2026-10-28 09:40:03",
+      "ok": true,
+      "response": {
+        "ok": true,
+        "data": [
+          {
+            "code": "sz301101",
+            "name": "明月镜片"
+          }
+        ]
+      }
+    },
+    {
+      "seq": 2,
+      "source": "westock",
+      "tool": "data_quote",
+      "params": {
+        "code": "sz301101"
+      },
+      "at": "2026-10-28 09:42:01",
+      "ok": true,
+      "response": {
+        "ok": true,
+        "data": {
+          "code": "sz301101",
+          "name": "明月镜片",
+          "price": 34.96,
+          "total_market_cap": 70.45,
+          "pe_ratio": 32.0,
+          "pb_ratio": 3.83
+        }
+      }
+    },
+    {
+      "seq": 3,
+      "source": "eastmoney",
+      "tool": "RPT_F10_FINANCE_GCASHFLOW",
+      "params": {
+        "code": "SZ301101",
+        "type": "年报"
+      },
+      "at": "2026-10-28 09:42:08",
+      "ok": true,
+      "url": "https://datacenter.eastmoney.com/securities/api/data/v1/get?reportName=RPT_F10_FINANCE_GCASHFLOW",
+      "response": {
+        "result": {
+          "data": [
+            {
+              "REPORT_DATE": "2025-12-31",
+              "CONSTRUCT_LONG_ASSET": 81234567.0
+            }
+          ]
+        }
+      },
+      "note": "WeStock 没有资本支出科目，FCF 靠这条跨源补数"
+    }
+  ]
+}
